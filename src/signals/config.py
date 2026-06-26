@@ -14,13 +14,23 @@ from src.models import Market
 @dataclass(frozen=True)
 class SignalConfig:
     # --- composite weights (sum need not be 1; score is normalised) ---
-    w_technical: float = 0.55   # swing trading is primarily technical
+    # Tuned via scripts/optimize_weights.py (train 2022-24, validated on 2025-26):
+    # lower macro weight + more momentum emphasis + selective entries improved
+    # out-of-sample risk-adjusted return. Fundamentals/sentiment kept at defaults
+    # (not backtestable — no free historical data).
+    w_technical: float = 0.63   # swing trading is primarily technical
     w_fundamental: float = 0.20
     w_sentiment: float = 0.10
-    w_macro: float = 0.15
+    w_macro: float = 0.07       # regime filter was over-weighted; per-stock signal wins
+
+    # --- technical sub-component weights (trend vs momentum vs mean-reversion) ---
+    # Momentum-tilted: the optimizer found momentum generalised better than pure trend.
+    w_trend: float = 0.30
+    w_momentum: float = 0.45
+    w_meanrev: float = 0.25
 
     # --- action thresholds on composite score in [-1, 1] ---
-    buy_threshold: float = 0.35     # candidate must clear this to be a BUY
+    buy_threshold: float = 0.40     # selective entries validated better out-of-sample
     sell_threshold: float = -0.30   # held name below this -> SELL
     trim_threshold: float = -0.12   # mild weakness -> TRIM
 

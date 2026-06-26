@@ -36,6 +36,10 @@ class BacktestConfig:
     # Exit style: a trailing stop lets winners run (vs a fixed ATR take-profit).
     use_trailing_stop: bool = False
     trail_atr_mult: float = 3.0  # trail this many ATRs below the position's peak
+    # Walk-forward window: only TRADE within [trade_start, trade_end] (ISO dates).
+    # Indicators still warm up on all prior data, so each window is out-of-sample.
+    trade_start: str | None = None
+    trade_end: str | None = None
 
 
 @dataclass
@@ -132,6 +136,16 @@ class Backtester:
 
         idx_close = idx_df["close"]
         dates = idx_close.index[bt.warmup_bars:]  # trade only after warmup
+        # Restrict the TRADING window (walk-forward folds). Indicator slices below
+        # still use the full history, so each window is genuinely out-of-sample.
+        if bt.trade_start:
+            ts = pd.Timestamp(bt.trade_start)
+            dates = dates[dates >= (ts.tz_localize(dates.tz) if dates.tz else ts)]
+        if bt.trade_end:
+            te = pd.Timestamp(bt.trade_end)
+            dates = dates[dates <= (te.tz_localize(dates.tz) if dates.tz else te)]
+        if len(dates) == 0:
+            raise RuntimeError(f"No trading dates in window for {self._market.value}")
 
         # Forward-filled close per symbol on the master calendar, so a held position
         # is ALWAYS valued at its last known price (never phantom-zeroed on a day the

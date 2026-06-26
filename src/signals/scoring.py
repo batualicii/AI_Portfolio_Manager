@@ -80,7 +80,10 @@ def technical_score(df: pd.DataFrame, cfg: SignalConfig) -> tuple[SubScore, Tech
     else:
         notes.append(f"RSI {rsi_val:.0f}")
 
-    value = _clamp(0.45 * trend + 0.30 * momentum + 0.25 * meanrev)
+    wt = cfg.w_trend + cfg.w_momentum + cfg.w_meanrev
+    value = _clamp(
+        (cfg.w_trend * trend + cfg.w_momentum * momentum + cfg.w_meanrev * meanrev) / wt
+    )
     view = TechnicalView(
         price=price, atr=atr_val, rsi=rsi_val,
         sma50=float(sma50) if pd.notna(sma50) else None,
