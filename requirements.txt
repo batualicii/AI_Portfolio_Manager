@@ -1,0 +1,19 @@
+# --- Core ---
+python-telegram-bot>=22.8      # Telegram bot framework (async); 22.x supports Python 3.14
+APScheduler==3.10.4            # daily 08:30 Europe/Istanbul trigger
+python-dotenv==1.0.1           # load secrets from .env
+
+# --- Market data ---
+yfinance==0.2.44              # US + BIST prices/fundamentals (free)
+requests==2.32.3             # news / REST APIs (Finnhub etc.)
+
+# --- Analysis ---
+pandas==2.2.3
+numpy==2.1.2
+pandas-ta==0.3.14b0          # technical indicators (RSI, MACD, MAs...)
+
+# --- Reasoning layer (explanation only) ---
+anthropic==0.39.0            # Claude API; narrates deterministic signals
+
+# --- Dev ---
+pytest==8.3.3

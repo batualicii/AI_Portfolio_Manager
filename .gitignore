@@ -1,0 +1,27 @@
+# Secrets — never commit
+.env
+
+# Runtime data
+data/
+*.db
+*.sqlite
+*.sqlite3
+*.log
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+
+# OS / editor
+.DS_Store
+.vscode/
+.idea/
+
+# Locally-installed agent skills / tooling (not project code)
+.agents/
+skills-lock.json
