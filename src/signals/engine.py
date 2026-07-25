@@ -110,12 +110,22 @@ class SignalEngine:
         sent = sentiment_score(self._news.get_news(symbol, market), cfg)
         reg = self.regime(market)
 
-        denom = cfg.w_technical + cfg.w_fundamental + cfg.w_sentiment + cfg.w_macro
-        composite = (
-            cfg.w_technical * tech.value
-            + cfg.w_fundamental * fund.value
-            + cfg.w_sentiment * sent.value
-            + cfg.w_macro * reg.score
+        # Renormalise over the sub-scores that actually had data. A component that
+        # returned 0.0 because nothing was available is not a neutral opinion, and
+        # leaving its weight in the denominator quietly shrinks the composite: with
+        # fundamentals and news missing — the permanent state for BIST names — the
+        # score could only ever reach ±0.70, while buy_threshold and sell_threshold
+        # were tuned on a backtest that renormalises over technical+macro and does
+        # span [-1, +1]. Same formula on both sides now.
+        contributions = [
+            (cfg.w_technical, tech.value, True),
+            (cfg.w_fundamental, fund.value, fund.available),
+            (cfg.w_sentiment, sent.value, sent.available),
+            (cfg.w_macro, reg.score, True),
+        ]
+        denom = sum(w for w, _, available in contributions if available) or 1.0
+        composite = sum(
+            w * value for w, value, available in contributions if available
         ) / denom
 
         notes = (

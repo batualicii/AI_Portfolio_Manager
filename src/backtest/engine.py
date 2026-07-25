@@ -50,6 +50,7 @@ class _Position:
     target: float
     entry_atr: float = 0.0   # ATR at entry, used to size the trailing stop
     peak: float = 0.0        # highest price seen since entry
+    entered_on: object = None  # fill date; stops are not checked on this bar
 
 
 @dataclass
@@ -61,6 +62,36 @@ class Trade:
     reason: str  # "stop" | "target" | "signal"
 
 
+def _next_open(sdf: pd.DataFrame, day) -> tuple[object, float] | None:
+    """(date, open) of the first bar strictly after `day`, or None at the end."""
+    later = sdf.index[sdf.index > day]
+    if len(later) == 0:
+        return None
+    nxt = later[0]
+    return nxt, float(sdf.loc[nxt, "open"])
+
+
+def _equal_weight_curve(panel: dict[str, pd.DataFrame], index) -> pd.Series:
+    """Buy-and-hold the whole watchlist, equally weighted, rebalanced never.
+
+    This is the benchmark that isolates what the strategy actually contributes.
+    The universe in SignalConfig is a hand-picked list of names that are large and
+    successful *today* (NVDA, AVGO, ASTOR, ...), so measuring a strategy that
+    trades those names against a broad index credits stock selection — made with
+    hindsight — to the timing logic. Comparing against an equal-weight hold of the
+    same names cancels that out: whatever is left is timing.
+    """
+    normalised = []
+    for df in panel.values():
+        close = df["close"].reindex(index).ffill().bfill()
+        if close.empty or not close.iloc[0]:
+            continue
+        normalised.append(close / float(close.iloc[0]))
+    if not normalised:
+        return pd.Series(dtype=float)
+    return pd.concat(normalised, axis=1).mean(axis=1)
+
+
 @dataclass
 class BacktestResult:
     market: Market
@@ -69,6 +100,10 @@ class BacktestResult:
     metrics: Metrics
     benchmark_metrics: Metrics
     trades: list[Trade] = field(default_factory=list)
+    # Equal-weight buy-and-hold of the same watchlist. The honest comparison:
+    # it holds the survivorship bias constant so the difference is timing alone.
+    universe_benchmark: pd.Series = field(default_factory=lambda: pd.Series(dtype=float))
+    universe_metrics: Metrics | None = None
 
 
 class Backtester:
@@ -176,6 +211,10 @@ class Backtester:
                     continue
                 row = sdf.loc[d]
                 pos = positions[sym]
+                if pos.entered_on is not None and d <= pos.entered_on:
+                    # Filled at this bar's open; the intraday range before the fill
+                    # is not ours to be stopped out on.
+                    continue
                 # Trailing stop: ratchet the stop up as the position makes new highs.
                 if bt.use_trailing_stop:
                     pos.peak = max(pos.peak, float(row["high"]))
@@ -223,20 +262,33 @@ class Backtester:
                     invested = exposure(d)
                     if invested >= bt.max_invested * equity_now:
                         break
-                    lv = buy_levels(view.price, view.atr, comp, cfg, risk_off=risk_off)
+                    # Fill at the NEXT bar's open, not at the close that produced
+                    # the signal. Computing a score from a closing price and then
+                    # buying at that same price is not a trade anyone can place —
+                    # by the time the close is known the session is over. Filling
+                    # on the next open is the earliest honest execution.
+                    fill = _next_open(panel[sym], d)
+                    if fill is None:
+                        continue  # no session left to trade into
+                    fill_day, fill_price = fill
+                    if fill_price <= 0:
+                        continue
+                    # Levels come off the price actually paid, so the stop really
+                    # is atr_stop_mult below the entry.
+                    lv = buy_levels(fill_price, view.atr, comp, cfg, risk_off=risk_off)
                     # Deploy toward the per-name cap (strongest names first) so capital
                     # isn't left idle in a bull market — the key drag the backtest exposed.
                     target_alloc = cfg.max_position_weight * equity_now
                     if risk_off:
                         target_alloc *= cfg.risk_off_size_factor
                     alloc = min(target_alloc, cash, (bt.max_invested * equity_now - invested))
-                    if alloc <= 0 or view.price <= 0:
+                    if alloc <= 0:
                         continue
-                    shares = alloc / view.price
-                    cash -= shares * view.price * (1 + bt.commission_pct)
+                    shares = alloc / fill_price
+                    cash -= shares * fill_price * (1 + bt.commission_pct)
                     positions[sym] = _Position(
-                        shares, view.price, lv.stop_loss, lv.take_profit,
-                        entry_atr=view.atr, peak=view.price,
+                        shares, fill_price, lv.stop_loss, lv.take_profit,
+                        entry_atr=view.atr, peak=fill_price, entered_on=fill_day,
                     )
 
             # 3) mark to market (forward-filled prices — no phantom zeros)
@@ -246,6 +298,10 @@ class Backtester:
         bench = idx_close.loc[equity.index[0]:].reindex(equity.index).ffill()
         bench = bench / float(bench.iloc[0]) * bt.start_equity
 
+        universe = _equal_weight_curve(panel, equity.index)
+        if not universe.empty:
+            universe = universe / float(universe.iloc[0]) * bt.start_equity
+
         trade_rets = [t.ret for t in trades]
         return BacktestResult(
             market=self._market,
@@ -254,4 +310,8 @@ class Backtester:
             metrics=compute_metrics(equity, trade_rets),
             benchmark_metrics=compute_metrics(bench, []),
             trades=trades,
+            universe_benchmark=universe,
+            universe_metrics=(
+                compute_metrics(universe, []) if not universe.empty else None
+            ),
         )

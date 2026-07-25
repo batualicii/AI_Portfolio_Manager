@@ -23,6 +23,10 @@ def _clamp(x: float, lo: float = -1.0, hi: float = 1.0) -> float:
 class SubScore:
     value: float
     notes: list[str] = field(default_factory=list)
+    # False when the inputs simply were not there. A 0.0 that means "no data" is
+    # not the same as a 0.0 that means "genuinely neutral", and blending the two
+    # identically silently dilutes the composite — see SignalEngine.analyze.
+    available: bool = True
 
 
 # ------------------------------- technical -------------------------------
@@ -126,7 +130,7 @@ def fundamental_score(f: Fundamentals, cfg: SignalConfig) -> SubScore:
         notes.append(f"margin {pm:+.0f}%")
 
     if not parts:
-        return SubScore(value=0.0, notes=["limited fundamentals"])
+        return SubScore(value=0.0, notes=["limited fundamentals"], available=False)
     return SubScore(value=_clamp(sum(parts) / len(parts)), notes=notes)
 
 
@@ -144,7 +148,8 @@ def sentiment_score(news: list[NewsItem], cfg: SignalConfig) -> SubScore:
     """Lightweight lexicon sentiment over headlines. Deliberately low-confidence
     (clamped to ±0.5) — it nudges, never dominates. Empty news = neutral."""
     if not news:
-        return SubScore(value=0.0, notes=["no recent news"])
+        # Permanent state for BIST names — Finnhub has no coverage there.
+        return SubScore(value=0.0, notes=["no recent news"], available=False)
     pos = neg = 0
     for item in news:
         words = set(item.headline.lower().replace(",", " ").split())

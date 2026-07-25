@@ -60,8 +60,19 @@ def main() -> int:
                 label = f"{int(core_w*100)}% core / {int(sat_w*100)}% sat"
             print(_row(label, blended, bench_total))
 
+        # The honest reference: holding the same watchlist equal-weight. The
+        # watchlist was chosen with hindsight, so any blend that beats the index
+        # partly inherits that pick rather than earning it.
+        if r.universe_metrics:
+            uni = r.universe_benchmark.reindex(r.equity.index).ffill()
+            print("  " + "-" * 82)
+            print(_row("equal-wt universe (ref)", uni, bench_total))
+
     print("\nTakeaway: blends keep most of buy-and-hold's return while the satellite "
           "improves Sharpe and adds actionable signals + risk alerts.")
+    print("Read the equal-weight universe row first: the watchlist is "
+          "survivorship-biased, so the gap to the index overstates what the "
+          "strategy itself contributes.")
     return 0
 
 

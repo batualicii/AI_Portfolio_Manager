@@ -32,7 +32,10 @@ TEST = ("2025-01-01", "2026-12-31")
 CORE_W, SAT_W = 0.7, 0.3
 
 # --- search space (kept focused to stay tractable and avoid over-searching) ---
-MACRO_SHARE = [0.10, 0.20, 0.35]          # macro-regime weight vs technical
+# The previous run picked 0.10, the lowest value offered — an optimum sitting on
+# the edge of the grid usually means the real one is outside it, so the range now
+# extends further down.
+MACRO_SHARE = [0.02, 0.05, 0.10, 0.20, 0.35]   # macro-regime weight vs technical
 TECH_PROFILES = {                          # trend / momentum / mean-reversion
     "balanced":   (0.45, 0.30, 0.25),
     "trend":      (0.60, 0.25, 0.15),
@@ -70,6 +73,39 @@ def objective(res: dict) -> float:
     return sum(m.sharpe for m, _ in res.values()) / len(res)
 
 
+def _closest_profile(cfg: SignalConfig) -> str:
+    """Name the TECH_PROFILES entry the shipped weights sit closest to."""
+    target = (cfg.w_trend, cfg.w_momentum, cfg.w_meanrev)
+    return min(
+        TECH_PROFILES,
+        key=lambda name: sum(
+            (a - b) ** 2 for a, b in zip(TECH_PROFILES[name], target)
+        ),
+    )
+
+
+def _boundary_warnings(winner) -> list[str]:
+    """Flag a winner sitting on the edge of the search grid.
+
+    An optimum at a grid boundary is usually not an optimum — it just means the
+    real one lies outside the range that was searched, so the result should be
+    re-run with the range extended rather than shipped.
+    """
+    macro_share, _, buy_thr, reb = winner
+    checks = [
+        ("macro share", macro_share, MACRO_SHARE),
+        ("buy threshold", buy_thr, BUY_THRESHOLDS),
+        ("rebalance", reb, REBALANCES),
+    ]
+    return [
+        f"Best {name}={value} is at the {'low' if value == min(grid) else 'high'} "
+        f"edge of the searched range {sorted(grid)} — the true optimum may lie "
+        f"outside it. Widen the grid before trusting this result."
+        for name, value, grid in checks
+        if len(grid) > 1 and value in (min(grid), max(grid))
+    ]
+
+
 def main() -> int:
     logging.basicConfig(level=logging.WARNING)
     provider = YahooProvider()
@@ -90,15 +126,20 @@ def main() -> int:
 
     scored.sort(key=lambda x: x[1], reverse=True)
 
-    # Baseline = current shipped defaults, for reference.
+    # Baseline = whatever is actually shipped right now, read off the config so
+    # this row cannot drift out of sync with it (it previously showed hardcoded
+    # values that no longer matched SignalConfig).
     base = SignalConfig()
     base_train = objective(blend_sharpe(provider, base, 5, TRAIN))
     base_test = objective(blend_sharpe(provider, base, 5, TEST))
+    base_macro_share = base.w_macro / (base.w_technical + base.w_macro)
+    base_profile = _closest_profile(base)
 
     print(f"{'rank':<5}{'macro':>6}{'tech-profile':>14}{'buyThr':>8}{'reb':>5}"
           f"{'TRAIN Sh':>10}{'TEST Sh':>9}{'Δ(test-train)':>14}")
     print("-" * 71)
-    print(f"{'base':<5}{0.15:>6.2f}{'balanced':>14}{0.35:>8.2f}{5:>5}"
+    print(f"{'base':<5}{base_macro_share:>6.2f}{base_profile:>14}"
+          f"{base.buy_threshold:>8.2f}{5:>5}"
           f"{base_train:>10.2f}{base_test:>9.2f}{base_test-base_train:>+14.2f}")
     print("-" * 71)
 
@@ -107,6 +148,10 @@ def main() -> int:
         test_sh = objective(blend_sharpe(provider, sig, reb, TEST))
         print(f"{rank:<5}{macro_share:>6.2f}{profile:>14}{buy_thr:>8.2f}{reb:>5}"
               f"{train_sh:>10.2f}{test_sh:>9.2f}{test_sh-train_sh:>+14.2f}")
+
+    if scored:
+        for warning in _boundary_warnings(scored[0][0]):
+            print(f"\n⚠️  {warning}")
 
     print("\nRobust = high on BOTH train and test with small Δ. A combo that's top on "
           "train but collapses on test is overfit — ignore it.")

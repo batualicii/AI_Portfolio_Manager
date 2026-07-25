@@ -54,6 +54,28 @@ def test_scores_are_ordered_uptrend_above_choppy_above_downtrend():
     assert up.value > side.value > down.value
 
 
+def test_a_smooth_uptrend_alone_cannot_reach_the_buy_threshold():
+    """The strategy structurally requires a pullback before it will enter.
+
+    On a perfectly smooth advance RSI pins at 100, so mean reversion contributes
+    its full -1.0 and the technical sub-score tops out near +0.29. Even with the
+    macro regime maxed out, the composite reaches roughly +0.36 — under the 0.40
+    buy threshold. Entries therefore only happen once RSI has cooled back under
+    70, which makes this a buy-the-dip-in-an-uptrend system rather than a
+    breakout system.
+
+    That is a coherent design, but it leaves the shipped threshold sitting close
+    to the structural ceiling: raising buy_threshold much above 0.40 would stop
+    entries almost entirely. Any re-tuning should re-check this headroom.
+    """
+    tech, _ = _tech(momentum_uptrend())
+    best_case_macro = 1.0
+    composite = (CFG.w_technical * tech.value + CFG.w_macro * best_case_macro) / (
+        CFG.w_technical + CFG.w_macro
+    )
+    assert composite < CFG.buy_threshold
+
+
 def test_mean_reversion_caps_the_score_of_an_extended_trend():
     """A textbook uptrend does NOT score anywhere near +1.
 
@@ -96,10 +118,20 @@ def test_overbought_rsi_is_reported():
 
 # ------------------------------ fundamental -------------------------------
 
-def test_fundamentals_with_no_data_are_neutral_and_say_so():
+def test_fundamentals_with_no_data_are_flagged_unavailable_not_neutral():
+    """"No data" and "neutral" must stay distinguishable.
+
+    The engine renormalises over the components that actually had data, so this
+    flag is what stops a missing input from silently shrinking the composite.
+    """
     score = fundamental_score(Fundamentals(symbol="X"), CFG)
     assert score.value == 0.0
+    assert score.available is False
     assert score.notes == ["limited fundamentals"]
+
+
+def test_fundamentals_with_data_are_marked_available():
+    assert fundamental_score(Fundamentals(symbol="X", pe_ratio=12.0), CFG).available
 
 
 @pytest.mark.parametrize("pe,expected_note", [
@@ -147,15 +179,19 @@ def _news(*headlines: str) -> list[NewsItem]:
     ]
 
 
-def test_no_news_is_neutral():
+def test_no_news_is_flagged_unavailable_not_neutral():
+    # The permanent state for BIST names — Finnhub does not cover them.
     score = sentiment_score([], CFG)
     assert score.value == 0.0
+    assert score.available is False
     assert score.notes == ["no recent news"]
 
 
-def test_headlines_without_lexicon_hits_are_neutral_but_counted():
+def test_headlines_without_lexicon_hits_are_a_real_neutral_reading():
+    """Headlines that exist but read neutral ARE an opinion, so they count."""
     score = sentiment_score(_news("Company files routine quarterly paperwork"), CFG)
     assert score.value == 0.0
+    assert score.available is True
     assert "1 headlines" in score.notes[0]
 
 

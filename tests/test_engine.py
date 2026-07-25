@@ -184,13 +184,6 @@ def test_risk_off_raises_the_bar_for_a_new_entry():
     assert calibrated is not None  # the risk-on case really did produce a BUY
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="Known defect: the live composite divides by the full weight sum even "
-           "when fundamentals/news returned a no-data 0.0, so live scores are "
-           "compressed into [-0.70, +0.70] while the thresholds were tuned on a "
-           "backtest that renormalises over technical+macro and spans [-1, +1].",
-)
 def test_missing_fundamentals_and_news_do_not_dilute_the_composite():
     """A neutral 0.0 that means "no data" must not be averaged in as an opinion.
 

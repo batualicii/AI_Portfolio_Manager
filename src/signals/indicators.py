@@ -17,7 +17,13 @@ from src.market.types import Bar
 def bars_to_frame(bars: list[Bar]) -> pd.DataFrame:
     """Convert provider Bars into an OHLCV DataFrame indexed by date."""
     if not bars:
-        return pd.DataFrame(columns=["open", "high", "low", "close", "volume"])
+        # Keep the DatetimeIndex even when empty: callers do index arithmetic
+        # (.normalize(), slicing by date) and a bare RangeIndex turns a clean
+        # "no data for this market" error into a confusing AttributeError.
+        return pd.DataFrame(
+            columns=["open", "high", "low", "close", "volume"],
+            index=pd.DatetimeIndex([]),
+        )
     df = pd.DataFrame(
         {
             "open": [b.open for b in bars],

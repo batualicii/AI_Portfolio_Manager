@@ -37,10 +37,10 @@ def main() -> int:
     sig = SignalConfig()
 
     for market in (Market.US, Market.BIST):
-        print(f"\n{'='*88}\n{market.value} — walk-forward (70/30 core-satellite vs buy & hold, per year)\n{'='*88}")
-        print(f"  {'Year':<9} {'Blend ret':>10} {'B&H ret':>9} {'Δret':>7} "
+        print(f"\n{'='*98}\n{market.value} — walk-forward (70/30 core-satellite vs buy & hold, per year)\n{'='*98}")
+        print(f"  {'Year':<9} {'Blend ret':>10} {'B&H ret':>9} {'EW-uni':>8} {'Δret':>7} "
               f"{'Blend Sh':>9} {'B&H Sh':>7} {'Blend DD':>9} {'B&H DD':>7}  verdict")
-        print("  " + "-" * 84)
+        print("  " + "-" * 94)
 
         beat_sharpe = kept_return = better_dd = total = 0
         for label, start, end in FOLDS:
@@ -65,16 +65,21 @@ def main() -> int:
             better_dd += dd_ok
             verdict = "".join(["S" if sharpe_ok else "·", "R" if ret_ok else "·",
                                "D" if dd_ok else "·"])
+            ew = (f"{r.universe_metrics.total_return_pct:>7.1f}%"
+                  if r.universe_metrics else f"{'n/a':>8}")
             print(f"  {label:<9} {bm.total_return_pct:>9.1f}% {bh.total_return_pct:>8.1f}% "
-                  f"{d_ret:>+6.1f}% {bm.sharpe:>9.2f} {bh.sharpe:>7.2f} "
+                  f"{ew} {d_ret:>+6.1f}% {bm.sharpe:>9.2f} {bh.sharpe:>7.2f} "
                   f"{bm.max_drawdown_pct:>8.1f}% {bh.max_drawdown_pct:>6.1f}%  {verdict}")
 
         if total:
-            print("  " + "-" * 84)
+            print("  " + "-" * 94)
             print(f"  Consistency: better/equal Sharpe {beat_sharpe}/{total} | "
                   f"kept return (≥ -3%) {kept_return}/{total} | "
                   f"shallower drawdown {better_dd}/{total}")
     print("\nKey: verdict flags S=better-Sharpe, R=kept-return, D=shallower-drawdown per year.")
+    print("EW-uni = equal-weight buy & hold of the same watchlist. Because that list was "
+          "picked with hindsight, it is the honest reference: the gap between the blend "
+          "and EW-uni is timing, while the gap to the index is mostly stock selection.")
     print("Each year is independent and out-of-sample for the fixed strategy — look for "
           "consistency, not one big year.")
     return 0
