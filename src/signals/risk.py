@@ -67,6 +67,20 @@ def buy_levels(
     )
 
 
-def hold_stop(price: float, atr: float, cfg: SignalConfig) -> float:
-    """Protective stop for an existing position we're keeping."""
-    return round(max(price - cfg.atr_stop_mult * atr, 0.01), 2)
+def hold_stop(view, cfg: SignalConfig) -> float:
+    """Trailing protective stop for a position we're keeping.
+
+    Hung off the highest close of the recent lookback rather than off today's
+    price. A stop measured from the current price walks *down* as the position
+    falls, so it can never actually be hit — it just reports a level a fixed
+    distance below wherever the price already is. Anchoring to the recent high
+    means the stop ratchets up through a rally and then stays put, which is what
+    makes it a real exit level.
+    """
+    anchor = max(view.recent_high, view.price)
+    return round(max(anchor - cfg.atr_stop_mult * view.atr, 0.01), 2)
+
+
+def stop_breached(view, stop: float) -> bool:
+    """True when price has already closed at or below its protective stop."""
+    return view.price <= stop

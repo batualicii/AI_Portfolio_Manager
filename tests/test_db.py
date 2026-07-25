@@ -125,3 +125,111 @@ def test_logging_returns_a_usable_row_id(store):
     first = store.log_recommendation(_reco("AAA"))
     second = store.log_recommendation(_reco("BBB"))
     assert isinstance(first, int) and second > first
+
+
+# ---------------------------- same-day dedupe -----------------------------
+
+def test_repeating_the_same_call_on_the_same_day_is_collapsed(store):
+    """/scan is on demand and the digest fires daily over the same signals.
+
+    Without this, one standing BUY becomes a dozen identical rows and /log shows
+    a single morning's scan instead of a history of decisions.
+    """
+    when = datetime(2024, 6, 3, 8, 30, tzinfo=timezone.utc)
+    first = store.log_recommendation(_reco(created_at=when), dedupe_same_day=True)
+    again = store.log_recommendation(
+        _reco(created_at=when + timedelta(hours=5)), dedupe_same_day=True
+    )
+    assert again == first
+    assert len(store.recent_recommendations()) == 1
+
+
+def test_the_same_call_on_the_next_day_is_a_new_entry(store):
+    when = datetime(2024, 6, 3, 8, 30, tzinfo=timezone.utc)
+    store.log_recommendation(_reco(created_at=when), dedupe_same_day=True)
+    store.log_recommendation(
+        _reco(created_at=when + timedelta(days=1)), dedupe_same_day=True
+    )
+    assert len(store.recent_recommendations()) == 2
+
+
+def test_a_changed_action_on_the_same_day_is_still_recorded(store):
+    """A BUY turning into a SELL is exactly the event the log exists to capture."""
+    when = datetime(2024, 6, 3, 8, 30, tzinfo=timezone.utc)
+    store.log_recommendation(_reco(action=Action.BUY, created_at=when),
+                             dedupe_same_day=True)
+    store.log_recommendation(
+        _reco(action=Action.SELL, created_at=when + timedelta(hours=2)),
+        dedupe_same_day=True,
+    )
+    assert {r.action for r in store.recent_recommendations()} == {Action.BUY, Action.SELL}
+
+
+def test_different_symbols_are_never_collapsed(store):
+    when = datetime(2024, 6, 3, tzinfo=timezone.utc)
+    store.log_recommendation(_reco("AAA", created_at=when), dedupe_same_day=True)
+    store.log_recommendation(_reco("BBB", created_at=when), dedupe_same_day=True)
+    assert len(store.recent_recommendations()) == 2
+
+
+def test_dedupe_is_opt_in_so_the_log_stays_append_only_by_default(store):
+    when = datetime(2024, 6, 3, tzinfo=timezone.utc)
+    store.log_recommendation(_reco(created_at=when))
+    store.log_recommendation(_reco(created_at=when))
+    assert len(store.recent_recommendations()) == 2
+
+
+# ------------------------------ concurrency -------------------------------
+
+def test_concurrent_writers_do_not_lose_or_corrupt_rows(store):
+    """The digest builds on a worker thread while handlers write from the loop.
+
+    check_same_thread=False makes the connection reachable from both, but not
+    safe to use from both at once — every statement goes through a lock.
+    """
+    import threading
+
+    errors: list[BaseException] = []
+
+    def writer(prefix: str) -> None:
+        try:
+            for i in range(50):
+                store.log_recommendation(_reco(f"{prefix}{i}"))
+        except BaseException as exc:  # noqa: BLE001 - surfaced via the assert below
+            errors.append(exc)
+
+    threads = [threading.Thread(target=writer, args=(p,)) for p in ("A", "B", "C")]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert errors == []
+    assert len(store.recent_recommendations(limit=500)) == 150
+
+
+def test_reads_and_writes_can_interleave_across_threads(store):
+    import threading
+
+    errors: list[BaseException] = []
+    stop = threading.Event()
+
+    def reader() -> None:
+        try:
+            while not stop.is_set():
+                store.list_holdings()
+                store.recent_recommendations(limit=5)
+        except BaseException as exc:  # noqa: BLE001
+            errors.append(exc)
+
+    thread = threading.Thread(target=reader)
+    thread.start()
+    try:
+        for i in range(100):
+            store.upsert_holding(Holding(f"S{i % 7}", Market.US, i + 1, 10.0))
+            store.log_recommendation(_reco(f"S{i}"))
+    finally:
+        stop.set()
+        thread.join()
+
+    assert errors == []

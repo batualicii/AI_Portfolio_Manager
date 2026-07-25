@@ -19,15 +19,17 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from telegram import Update
 from telegram.constants import ParseMode
+from telegram.error import BadRequest
 from telegram.ext import (
     Application,
     CommandHandler,
     ContextTypes,
 )
 
+from src.bot.markdown import escape_md
 from src.config import Settings
 from src.market.provider import MarketDataProvider
-from src.models import Holding, Market
+from src.models import Action, Holding, Market
 from src.portfolio.format import format_report
 from src.portfolio.valuation import ValuationService
 from src.reasoning.narrator import ClaudeNarrator
@@ -121,11 +123,26 @@ class PortfolioBot:
 
     async def send_message(self, text: str) -> None:
         """Push a message to the owner (used by the daily digest scheduler)."""
-        await self._app.bot.send_message(
-            chat_id=self._settings.telegram_owner_id,
-            text=text,
-            parse_mode=ParseMode.MARKDOWN,
-        )
+        await self._send_to_owner(text)
+
+    async def _send_to_owner(self, text: str) -> None:
+        """Send with Markdown, falling back to plain text if Telegram rejects it.
+
+        Telegram refuses the entire message when its Markdown does not balance.
+        Dynamic text is escaped at the formatters, but this is the digest the
+        user's morning depends on — an unreadable delivery beats no delivery.
+        """
+        try:
+            await self._app.bot.send_message(
+                chat_id=self._settings.telegram_owner_id,
+                text=text,
+                parse_mode=ParseMode.MARKDOWN,
+            )
+        except BadRequest as exc:
+            log.warning("Markdown rejected (%s); resending as plain text.", exc)
+            await self._app.bot.send_message(
+                chat_id=self._settings.telegram_owner_id, text=text
+            )
 
     # ---------------------------- handlers ----------------------------
 
@@ -178,7 +195,7 @@ class PortfolioBot:
             Holding(symbol=symbol, market=market, quantity=qty, avg_cost=avg, note=note)
         )
         await update.effective_message.reply_text(
-            f"✅ Saved *{symbol}* ({market.value}): {qty:g} @ "
+            f"✅ Saved *{escape_md(symbol)}* ({market.value}): {qty:g} @ "
             f"{avg:g} {market.currency}.",
             parse_mode=ParseMode.MARKDOWN,
         )
@@ -196,10 +213,11 @@ class PortfolioBot:
             await update.effective_message.reply_text("Market must be `US` or `BIST`.")
             return
         removed = self._store.remove_holding(args[1], market)
+        symbol = escape_md(args[1].upper())
         msg = (
-            f"🗑️ Removed *{args[1].upper()}* ({market.value})."
+            f"🗑️ Removed *{symbol}* ({market.value})."
             if removed
-            else f"No position found for {args[1].upper()} ({market.value})."
+            else f"No position found for {symbol} ({market.value})."
         )
         await update.effective_message.reply_text(msg, parse_mode=ParseMode.MARKDOWN)
 
@@ -214,9 +232,9 @@ class PortfolioBot:
         lines = ["*Current holdings*"]
         for h in holdings:
             lines.append(
-                f"• `{h.symbol}` ({h.market.value}) — {h.quantity:g} @ "
+                f"• `{escape_md(h.symbol)}` ({h.market.value}) — {h.quantity:g} @ "
                 f"{h.avg_cost:g} {h.market.currency}"
-                + (f"  _{h.note}_" if h.note else "")
+                + (f"  _{escape_md(h.note)}_" if h.note else "")
             )
         await update.effective_message.reply_text(
             "\n".join(lines), parse_mode=ParseMode.MARKDOWN
@@ -251,8 +269,7 @@ class PortfolioBot:
                 self._narrator.narrate, recos
             )
         # Persist to the audit trail so performance can be reviewed later.
-        for r in recos:
-            self._store.log_recommendation(r)
+        self._log_actionable(recos)
         held_keys = {(h.symbol.upper(), h.market) for h in holdings}
         text = format_recommendations(recos, header="Signal scan", held_keys=held_keys)
         text += _narration_warning(narration_error)
@@ -261,13 +278,36 @@ class PortfolioBot:
     async def _send_chunked(self, update, placeholder, text: str) -> None:
         """Send `text` respecting Telegram's 4096-char limit: edit the placeholder
         with the first chunk, then reply with any remaining chunks. Splits on line
-        boundaries so Markdown stays valid within each message."""
+        boundaries so Markdown stays valid within each message, and falls back to
+        plain text per chunk if Telegram rejects the formatting."""
         chunks = _split_for_telegram(text)
-        await placeholder.edit_text(chunks[0], parse_mode=ParseMode.MARKDOWN)
+        try:
+            await placeholder.edit_text(chunks[0], parse_mode=ParseMode.MARKDOWN)
+        except BadRequest as exc:
+            log.warning("Markdown rejected (%s); resending as plain text.", exc)
+            await placeholder.edit_text(chunks[0])
         for chunk in chunks[1:]:
-            await update.effective_message.reply_text(
-                chunk, parse_mode=ParseMode.MARKDOWN
-            )
+            try:
+                await update.effective_message.reply_text(
+                    chunk, parse_mode=ParseMode.MARKDOWN
+                )
+            except BadRequest as exc:
+                log.warning("Markdown rejected (%s); resending as plain text.", exc)
+                await update.effective_message.reply_text(chunk)
+
+    def _log_actionable(self, recos) -> None:
+        """Record the calls that ask the user to do something.
+
+        HOLDs are the steady state, not events: logging one per name per scan
+        buries the actual decisions under standing advice and turns /log into a
+        printout of a single morning. Repeats of the same call on the same day
+        are collapsed too, since /scan is run on demand and the digest fires
+        daily over the same signals.
+        """
+        for reco in recos:
+            if reco.action is Action.HOLD:
+                continue
+            self._store.log_recommendation(reco, dedupe_same_day=True)
 
     # ------------------------------ digest ------------------------------
 
@@ -283,8 +323,7 @@ class PortfolioBot:
         narration_error = None
         if self._narrator is not None:
             recos, narration_error = self._narrator.narrate(recos)
-        for r in recos:
-            self._store.log_recommendation(r)
+        self._log_actionable(recos)
 
         held_keys = {(h.symbol.upper(), h.market) for h in holdings}
         now = datetime.now(ZoneInfo(self._settings.digest_timezone))
@@ -314,11 +353,7 @@ class PortfolioBot:
             )
             return
         for chunk in _split_for_telegram(text):
-            await self._app.bot.send_message(
-                chat_id=self._settings.telegram_owner_id,
-                text=chunk,
-                parse_mode=ParseMode.MARKDOWN,
-            )
+            await self._send_to_owner(chunk)
 
     async def _digest_now(self, update: Update, _: ContextTypes.DEFAULT_TYPE) -> None:
         """/digest — build and send the morning digest on demand (for testing)."""
@@ -330,15 +365,15 @@ class PortfolioBot:
         recos = self._store.recent_recommendations(limit=10)
         if not recos:
             await update.effective_message.reply_text(
-                "No recommendations logged yet. The signal engine arrives in Stage 3."
+                "No recommendations logged yet. Run /scan or /digest first."
             )
             return
         lines = ["*Recent recommendations*"]
         for r in recos:
             when = r.created_at.strftime("%Y-%m-%d") if r.created_at else "?"
             lines.append(
-                f"• {when} *{r.action.value}* `{r.symbol}` ({r.market.value}) "
-                f"@ {r.price:g}"
+                f"• {when} *{r.action.value}* `{escape_md(r.symbol)}` "
+                f"({r.market.value}) @ {r.price:g}"
             )
         await update.effective_message.reply_text(
             "\n".join(lines), parse_mode=ParseMode.MARKDOWN
@@ -363,18 +398,32 @@ _TG_LIMIT = 4000  # safely under Telegram's 4096 hard cap
 
 
 def _split_for_telegram(text: str, limit: int = _TG_LIMIT) -> list[str]:
-    """Split text into <=limit chunks on line boundaries (keeps Markdown balanced)."""
+    """Split text into <=limit chunks on line boundaries (keeps Markdown balanced).
+
+    A single line longer than the limit is hard-split rather than emitted whole:
+    line-boundary splitting alone still produces an over-length chunk, which
+    Telegram rejects outright. A very long LLM rationale can reach that size.
+    """
     if len(text) <= limit:
         return [text]
     chunks: list[str] = []
     current = ""
-    for line in text.split("\n"):
-        if len(current) + len(line) + 1 > limit and current:
+
+    def flush() -> None:
+        nonlocal current
+        if current.strip():
             chunks.append(current.rstrip("\n"))
-            current = ""
+        current = ""
+
+    for line in text.split("\n"):
+        while len(line) + 1 > limit:
+            flush()
+            chunks.append(line[:limit])
+            line = line[limit:]
+        if len(current) + len(line) + 1 > limit and current:
+            flush()
         current += line + "\n"
-    if current.strip():
-        chunks.append(current.rstrip("\n"))
+    flush()
     return chunks
 
 

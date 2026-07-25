@@ -121,6 +121,40 @@ def test_a_healthy_held_name_is_a_hold_that_still_carries_a_stop():
     assert reco.take_profit is None
 
 
+def test_a_held_name_whose_trailing_stop_is_breached_becomes_a_sell():
+    """A mandatory stop is not advisory.
+
+    A position that has round-tripped a rally can still score above the sell
+    threshold — momentum stays positive as the fall decelerates. If the stop is
+    taken out, that is the exit signal regardless of the composite, which is the
+    entire reason SPEC section 1 requires one on every position.
+    """
+    cfg = dataclasses.replace(SMALL_UNIVERSE, sell_threshold=-0.99, trim_threshold=-0.98)
+    # Rally then give it all back: the recent high is far above the last price.
+    bars = momentum_uptrend(260) + momentum_downtrend(40, start=400.0, daily_pct=0.03)
+    provider = _with_index(FakeProvider(), cfg, momentum_uptrend())
+    provider.set_history("AAA", Market.US, bars)
+    holding = Holding("AAA", Market.US, 10, 100.0)
+
+    reco = _engine(provider, cfg).analyze("AAA", Market.US, holding=holding)
+
+    assert reco is not None and reco.action is Action.SELL
+    assert "trailing stop" in reco.rationale
+
+
+def test_a_healthy_holds_stop_trails_below_its_recent_high():
+    cfg = dataclasses.replace(SMALL_UNIVERSE, trim_threshold=-1.0, sell_threshold=-1.5)
+    provider = _with_index(FakeProvider(), cfg, momentum_uptrend())
+    provider.set_history("AAA", Market.US, momentum_uptrend())
+    holding = Holding("AAA", Market.US, 10, 100.0)
+
+    reco = _engine(provider, cfg).analyze("AAA", Market.US, holding=holding)
+
+    assert reco is not None and reco.stop_loss is not None
+    assert reco.stop_loss < reco.price      # still a protective level
+    assert reco.action is Action.HOLD       # not breached
+
+
 def test_mild_weakness_in_a_held_name_is_a_trim_not_a_sell():
     # Squeeze the thresholds so a flat, scoreless name lands in the TRIM band.
     cfg = dataclasses.replace(SMALL_UNIVERSE, sell_threshold=-0.9, trim_threshold=0.9)

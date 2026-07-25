@@ -11,6 +11,7 @@ and synchronous; the bot calls it from short handlers so blocking is negligible.
 from __future__ import annotations
 
 import sqlite3
+import threading
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -51,51 +52,61 @@ class Store:
         self._path = db_path
         db_path.parent.mkdir(parents=True, exist_ok=True)
         # check_same_thread=False so the scheduler thread and bot loop can share it.
+        # That makes the connection reachable from several threads but does NOT
+        # make it safe to use from several threads at once: the digest builds on
+        # a worker thread (asyncio.to_thread) while command handlers write from
+        # the event loop, so every statement goes through this lock.
         self._conn = sqlite3.connect(db_path, check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
-        self._conn.executescript(_SCHEMA)
-        self._conn.commit()
+        self._lock = threading.RLock()
+        with self._lock:
+            self._conn.executescript(_SCHEMA)
+            self._conn.commit()
 
     def close(self) -> None:
-        self._conn.close()
+        with self._lock:
+            self._conn.close()
 
     # ----------------------------- holdings -----------------------------
 
     def upsert_holding(self, holding: Holding) -> None:
         """Insert or update a position (keyed by symbol+market)."""
-        self._conn.execute(
-            """
-            INSERT INTO holdings (symbol, market, quantity, avg_cost, note)
-            VALUES (?, ?, ?, ?, ?)
-            ON CONFLICT(symbol, market) DO UPDATE SET
-                quantity = excluded.quantity,
-                avg_cost = excluded.avg_cost,
-                note     = excluded.note
-            """,
-            (
-                holding.symbol.upper(),
-                holding.market.value,
-                holding.quantity,
-                holding.avg_cost,
-                holding.note,
-            ),
-        )
-        self._conn.commit()
+        with self._lock:
+            self._conn.execute(
+                """
+                INSERT INTO holdings (symbol, market, quantity, avg_cost, note)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(symbol, market) DO UPDATE SET
+                    quantity = excluded.quantity,
+                    avg_cost = excluded.avg_cost,
+                    note     = excluded.note
+                """,
+                (
+                    holding.symbol.upper(),
+                    holding.market.value,
+                    holding.quantity,
+                    holding.avg_cost,
+                    holding.note,
+                ),
+            )
+            self._conn.commit()
 
     def remove_holding(self, symbol: str, market: Market) -> bool:
         """Delete a position. Returns True if a row was actually removed."""
-        cur = self._conn.execute(
-            "DELETE FROM holdings WHERE symbol = ? AND market = ?",
-            (symbol.upper(), market.value),
-        )
-        self._conn.commit()
-        return cur.rowcount > 0
+        with self._lock:
+            cur = self._conn.execute(
+                "DELETE FROM holdings WHERE symbol = ? AND market = ?",
+                (symbol.upper(), market.value),
+            )
+            self._conn.commit()
+            return cur.rowcount > 0
 
     def list_holdings(self) -> list[Holding]:
-        rows = self._conn.execute(
-            "SELECT symbol, market, quantity, avg_cost, note "
-            "FROM holdings ORDER BY market, symbol"
-        ).fetchall()
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT symbol, market, quantity, avg_cost, note "
+                "FROM holdings ORDER BY market, symbol"
+            ).fetchall()
         return [
             Holding(
                 symbol=r["symbol"],
@@ -109,37 +120,62 @@ class Store:
 
     # -------------------------- recommendations -------------------------
 
-    def log_recommendation(self, reco: Recommendation) -> int:
-        """Append a recommendation to the audit log. Returns its row id."""
-        created = (reco.created_at or datetime.now(timezone.utc)).isoformat()
-        cur = self._conn.execute(
-            """
-            INSERT INTO recommendations
-                (created_at, symbol, market, action, score, price,
-                 stop_loss, take_profit, suggested_weight, rationale)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                created,
-                reco.symbol.upper(),
-                reco.market.value,
-                reco.action.value,
-                reco.score,
-                reco.price,
-                reco.stop_loss,
-                reco.take_profit,
-                reco.suggested_weight,
-                reco.rationale,
-            ),
-        )
-        self._conn.commit()
-        return int(cur.lastrowid)
+    def log_recommendation(
+        self, reco: Recommendation, *, dedupe_same_day: bool = False
+    ) -> int:
+        """Append a recommendation to the audit log. Returns its row id.
+
+        With `dedupe_same_day`, a call that repeats an identical
+        (symbol, market, action) already logged today is skipped and the existing
+        row id is returned. /scan is run on demand and the digest fires daily, so
+        without this the log fills with copies of the same standing advice and
+        /log shows one morning's scan instead of a history.
+        """
+        created_at = reco.created_at or datetime.now(timezone.utc)
+        created = created_at.isoformat()
+        with self._lock:
+            if dedupe_same_day:
+                existing = self._conn.execute(
+                    """
+                    SELECT id FROM recommendations
+                    WHERE symbol = ? AND market = ? AND action = ?
+                      AND date(created_at) = date(?)
+                    ORDER BY id DESC LIMIT 1
+                    """,
+                    (reco.symbol.upper(), reco.market.value, reco.action.value, created),
+                ).fetchone()
+                if existing is not None:
+                    return int(existing["id"])
+
+            cur = self._conn.execute(
+                """
+                INSERT INTO recommendations
+                    (created_at, symbol, market, action, score, price,
+                     stop_loss, take_profit, suggested_weight, rationale)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    created,
+                    reco.symbol.upper(),
+                    reco.market.value,
+                    reco.action.value,
+                    reco.score,
+                    reco.price,
+                    reco.stop_loss,
+                    reco.take_profit,
+                    reco.suggested_weight,
+                    reco.rationale,
+                ),
+            )
+            self._conn.commit()
+            return int(cur.lastrowid)
 
     def recent_recommendations(self, limit: int = 20) -> list[Recommendation]:
-        rows = self._conn.execute(
-            "SELECT * FROM recommendations ORDER BY created_at DESC LIMIT ?",
-            (limit,),
-        ).fetchall()
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT * FROM recommendations ORDER BY created_at DESC LIMIT ?",
+                (limit,),
+            ).fetchall()
         return [
             Recommendation(
                 symbol=r["symbol"],

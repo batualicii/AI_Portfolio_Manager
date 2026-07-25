@@ -35,6 +35,9 @@ class TechnicalView:
     rsi: float
     sma50: float | None
     sma200: float | None
+    # Highest close over the trailing stop lookback. Lets a held position's stop
+    # ratchet up with the trend instead of drifting down with the price.
+    recent_high: float = 0.0
 
 
 def technical_score(df: pd.DataFrame, cfg: SignalConfig) -> tuple[SubScore, TechnicalView]:
@@ -88,6 +91,7 @@ def technical_score(df: pd.DataFrame, cfg: SignalConfig) -> tuple[SubScore, Tech
         price=price, atr=atr_val, rsi=rsi_val,
         sma50=float(sma50) if pd.notna(sma50) else None,
         sma200=float(sma200) if pd.notna(sma200) else None,
+        recent_high=float(close.tail(cfg.hold_stop_lookback).max()),
     )
     return SubScore(value=value, notes=notes), view
 

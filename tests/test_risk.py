@@ -9,7 +9,8 @@ from __future__ import annotations
 import pytest
 
 from src.signals.config import SignalConfig
-from src.signals.risk import buy_levels, hold_stop
+from src.signals.risk import buy_levels, hold_stop, stop_breached
+from src.signals.scoring import TechnicalView
 
 CFG = SignalConfig()
 
@@ -82,10 +83,46 @@ def test_risk_off_halves_the_position():
     )
 
 
-def test_hold_stop_sits_below_the_current_price():
-    stop = hold_stop(100.0, 2.0, CFG)
-    assert stop == pytest.approx(100.0 - CFG.atr_stop_mult * 2.0)
+# ------------------------- trailing stop on a hold -------------------------
+
+def _view(price: float, atr: float, recent_high: float) -> TechnicalView:
+    return TechnicalView(price=price, atr=atr, rsi=50.0, sma50=None, sma200=None,
+                         recent_high=recent_high)
+
+
+def test_hold_stop_hangs_off_the_recent_high_not_todays_price():
+    """This is the whole point of the trailing stop.
+
+    A stop measured from the current price walks down with the position, so it
+    can never actually be hit — it only ever reports a level a fixed distance
+    below wherever the price already is. Anchoring to the recent high means a
+    position that has given back its gains has a stop that stayed put.
+    """
+    view = _view(price=90.0, atr=2.0, recent_high=120.0)
+    assert hold_stop(view, CFG) == pytest.approx(120.0 - CFG.atr_stop_mult * 2.0)
+
+
+def test_hold_stop_ratchets_up_as_the_position_makes_new_highs():
+    early = hold_stop(_view(100.0, 2.0, recent_high=100.0), CFG)
+    later = hold_stop(_view(140.0, 2.0, recent_high=140.0), CFG)
+    assert later > early
+
+
+def test_hold_stop_uses_the_price_when_it_is_the_new_high():
+    view = _view(price=150.0, atr=2.0, recent_high=140.0)
+    assert hold_stop(view, CFG) == pytest.approx(150.0 - CFG.atr_stop_mult * 2.0)
 
 
 def test_hold_stop_stays_positive_for_a_wildly_volatile_name():
-    assert hold_stop(5.0, 100.0, CFG) > 0
+    assert hold_stop(_view(5.0, 100.0, recent_high=5.0), CFG) > 0
+
+
+def test_a_breach_is_detected_when_price_falls_to_the_stop():
+    view = _view(price=80.0, atr=2.0, recent_high=120.0)
+    stop = hold_stop(view, CFG)          # 116.0
+    assert stop_breached(view, stop) is True
+
+
+def test_no_breach_while_the_position_is_above_its_stop():
+    view = _view(price=118.0, atr=2.0, recent_high=120.0)
+    assert stop_breached(view, hold_stop(view, CFG)) is False
