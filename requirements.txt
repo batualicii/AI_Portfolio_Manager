@@ -1,19 +1,30 @@
+# Lower bounds, not exact pins: this is a personal app that talks to APIs which
+# change under it (Yahoo especially). Pinning to a 2024 release is what silently
+# disabled the reasoning layer — see the anthropic note below.
+
 # --- Core ---
 python-telegram-bot>=22.8      # Telegram bot framework (async); 22.x supports Python 3.14
-APScheduler==3.10.4            # daily 08:30 Europe/Istanbul trigger
-python-dotenv==1.0.1           # load secrets from .env
+APScheduler>=3.10.4            # daily 08:30 Europe/Istanbul trigger
+python-dotenv>=1.0.1           # load secrets from .env
 
 # --- Market data ---
-yfinance==0.2.44              # US + BIST prices/fundamentals (free)
-requests==2.32.3             # news / REST APIs (Finnhub etc.)
+yfinance>=1.5.2                # US + BIST prices/fundamentals (free).
+                               # 0.2.x is from 2024 and breaks against Yahoo's current
+                               # endpoints; verify with `python -m scripts.smoke_data`.
+requests>=2.32.3               # news / REST APIs (Finnhub etc.)
 
 # --- Analysis ---
-pandas==2.2.3
-numpy==2.1.2
-pandas-ta==0.3.14b0          # technical indicators (RSI, MACD, MAs...)
+pandas>=2.2.3
+numpy>=2.1.2
+# pandas-ta is deliberately absent: it is unmaintained and fails to install on
+# numpy 2. Indicators are implemented directly in src/signals/indicators.py.
 
 # --- Reasoning layer (explanation only) ---
-anthropic==0.39.0            # Claude API; narrates deterministic signals
+anthropic>=0.120.0             # Claude API; narrates deterministic signals.
+                               # The narrator uses structured outputs
+                               # (output_config.format), which older SDKs do not
+                               # support — on 0.39.0 every narration call errored
+                               # and silently fell back to the terse notes.
 
 # --- Dev ---
-pytest==8.3.3
+pytest>=8.3.3
