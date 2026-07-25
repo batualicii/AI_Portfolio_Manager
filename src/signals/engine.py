@@ -106,8 +106,8 @@ class SignalEngine:
         df = ind.bars_to_frame(bars)
 
         tech, view = technical_score(df, cfg)
-        fund = fundamental_score(self._provider.get_fundamentals(symbol, market), cfg)
-        sent = sentiment_score(self._news.get_news(symbol, market), cfg)
+        fund = fundamental_score(self._provider.get_fundamentals(symbol, market))
+        sent = sentiment_score(self._news.get_news(symbol, market))
         reg = self.regime(market)
 
         # Renormalise over the sub-scores that actually had data. A component that

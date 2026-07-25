@@ -18,8 +18,16 @@ unacceptable risk. So the design was revised to what the evidence supports:
 - **Satellite (~30%)** — the tactical signal engine: high-conviction swing entries, each
   with a mandatory stop, plus **risk alerts** on core holdings.
 - **Objective:** best **risk-adjusted** return (Sharpe / drawdown), not raw outperformance.
-  Validated: a 70/30 blend kept ~99% (US) / ~93% (BIST) of buy-and-hold return with
-  **better Sharpe and shallower drawdowns in both markets**.
+
+> ⚠️ **The published validation numbers are stale and must be re-run.**
+> The earlier claim — a 70/30 blend keeping ~99% (US) / ~93% (BIST) of buy-and-hold
+> return with better Sharpe and shallower drawdowns — was produced by a backtest that
+> has since been corrected in two ways that change results (§6c): entries now fill at
+> the next bar's open rather than at the signal bar's close, and the honest benchmark
+> is now an equal-weight hold of the same watchlist rather than a broad index.
+> Re-run `python -m scripts.walk_forward` and `python -m scripts.run_backtest`, then
+> replace this paragraph with the real figures before relying on any of it.
+
 - Still **in-sample**; needs walk-forward validation, and the satellite's downside
   protection will matter most in a bear market not present in the test window.
 
@@ -100,10 +108,39 @@ unacceptable risk. So the design was revised to what the evidence supports:
 - `python-telegram-bot`, `yfinance`, `requests`/`httpx`, `pandas`, `pandas-ta` (technicals),
   `anthropic` (reasoning layer), `APScheduler`/cron (daily trigger).
 
+## 6c. Known limits of the backtest (read before believing any number it prints)
+Every backtest result carries these caveats. They are not reasons to distrust the
+design; they are the boundaries of what the evidence actually covers.
+
+- **Survivorship bias in the watchlist — the biggest one.** `SignalConfig.us_universe`
+  and `bist_universe` are hand-picked lists of companies that are large and successful
+  *today* (NVDA, AVGO, ASTOR, FROTO…). Backtesting a strategy that trades those names
+  against a broad index credits a stock-selection decision made with hindsight to the
+  timing logic. **This is why every script now also reports an equal-weight buy-and-hold
+  of the same watchlist**: that reference holds the bias constant, so the gap between the
+  strategy and the equal-weight universe is timing, while the gap to the index is mostly
+  selection. Judge the strategy on the former.
+- **No historical fundamentals or news.** Free history does not exist for either, so the
+  fundamental and sentiment sub-scores are inert in every backtest. Only the
+  technical + macro backbone — 70% of the live weight — is ever validated.
+- **Parameters were selected while looking at the test window.** `optimize_weights.py`
+  splits train/test honestly, but a human chose the shipped combination after seeing
+  both columns, which makes the test window partly in-sample. Treat the walk-forward
+  consistency counts, not the headline Sharpe, as the real evidence.
+- **One market regime.** The 2022–2026 window has no sustained bear market for these
+  indices. The satellite's whole purpose is downside protection, and that is precisely
+  what the data cannot test.
+- **Fills are optimistic even after the fix.** Entries fill at the next bar's open with
+  a 0.1% commission-and-slippage charge. Real slippage on a gap open, and BIST liquidity
+  in particular, can be worse.
+
 ## 6b. Validation & safety (MANDATORY before real-money trading)
 - **Backtest gate:** the strategy must be backtested on 2–5 years of history for BOTH markets
-  before any live use. If it does not beat a simple buy-and-hold benchmark (S&P 500 / BIST 100),
-  the logic is revised before trading. No untested signals reach real money.
+  before any live use. If it does not beat a simple buy-and-hold benchmark, the logic is
+  revised before trading. No untested signals reach real money.
+  **The benchmark for this gate is the equal-weight watchlist hold, not the index** — see
+  §6c; clearing the gate against the index alone mostly proves the watchlist was picked
+  with hindsight.
 - Paper-trading period was considered and **deliberately skipped** by the user. Consequence:
   the first real-money weeks are effectively the live test → **start with small position sizes**
   until several weeks of real recommendations have been observed.

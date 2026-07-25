@@ -96,9 +96,3 @@ def bollinger(
 def rate_of_change(close: pd.Series, window: int) -> pd.Series:
     """Percent change over `window` bars, in percent."""
     return close.pct_change(periods=window) * 100.0
-
-
-def pct_from_high(close: pd.Series, window: int) -> pd.Series:
-    """Percent below the rolling `window`-bar high (0 = at the high, negative below)."""
-    roll_high = close.rolling(window=window, min_periods=1).max()
-    return (close - roll_high) / roll_high * 100.0

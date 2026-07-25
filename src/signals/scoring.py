@@ -102,7 +102,7 @@ def technical_score(df: pd.DataFrame, cfg: SignalConfig) -> tuple[SubScore, Tech
 
 # ------------------------------ fundamental ------------------------------
 
-def fundamental_score(f: Fundamentals, cfg: SignalConfig) -> SubScore:
+def fundamental_score(f: Fundamentals) -> SubScore:
     parts: list[float] = []
     notes: list[str] = []
 
@@ -144,7 +144,7 @@ _NEG = {"miss", "misses", "plunge", "drop", "downgrade", "downgraded", "loss",
         "recall", "sell", "bearish", "falls", "decline", "slump", "halt", "delay"}
 
 
-def sentiment_score(news: list[NewsItem], cfg: SignalConfig) -> SubScore:
+def sentiment_score(news: list[NewsItem]) -> SubScore:
     """Lightweight lexicon sentiment over headlines. Deliberately low-confidence
     (clamped to ±0.5) — it nudges, never dominates. Empty news = neutral."""
     if not news:

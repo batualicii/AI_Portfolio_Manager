@@ -124,14 +124,14 @@ def test_fundamentals_with_no_data_are_flagged_unavailable_not_neutral():
     The engine renormalises over the components that actually had data, so this
     flag is what stops a missing input from silently shrinking the composite.
     """
-    score = fundamental_score(Fundamentals(symbol="X"), CFG)
+    score = fundamental_score(Fundamentals(symbol="X"))
     assert score.value == 0.0
     assert score.available is False
     assert score.notes == ["limited fundamentals"]
 
 
 def test_fundamentals_with_data_are_marked_available():
-    assert fundamental_score(Fundamentals(symbol="X", pe_ratio=12.0), CFG).available
+    assert fundamental_score(Fundamentals(symbol="X", pe_ratio=12.0)).available
 
 
 @pytest.mark.parametrize("pe,expected_note", [
@@ -142,20 +142,20 @@ def test_fundamentals_with_data_are_marked_available():
     (80.0, "very rich"),
 ])
 def test_pe_bands_are_labelled_at_their_documented_boundaries(pe, expected_note):
-    score = fundamental_score(Fundamentals(symbol="X", pe_ratio=pe), CFG)
+    score = fundamental_score(Fundamentals(symbol="X", pe_ratio=pe))
     assert any(expected_note in note for note in score.notes)
 
 
 def test_cheap_pe_scores_above_expensive_pe():
-    cheap = fundamental_score(Fundamentals(symbol="X", pe_ratio=10.0), CFG)
-    rich = fundamental_score(Fundamentals(symbol="X", pe_ratio=80.0), CFG)
+    cheap = fundamental_score(Fundamentals(symbol="X", pe_ratio=10.0))
+    rich = fundamental_score(Fundamentals(symbol="X", pe_ratio=80.0))
     assert cheap.value > rich.value
 
 
 def test_growth_and_margin_saturate_rather_than_exceeding_the_bound():
     # revenue_growth/profit_margin arrive as fractions; 25% saturates the term.
     score = fundamental_score(
-        Fundamentals(symbol="X", revenue_growth=5.0, profit_margin=5.0), CFG
+        Fundamentals(symbol="X", revenue_growth=5.0, profit_margin=5.0)
     )
     assert score.value == pytest.approx(1.0)
 
@@ -163,7 +163,7 @@ def test_growth_and_margin_saturate_rather_than_exceeding_the_bound():
 def test_fundamental_score_stays_within_bounds_at_the_negative_extreme():
     score = fundamental_score(
         Fundamentals(symbol="X", pe_ratio=-1.0, revenue_growth=-5.0,
-                     profit_margin=-5.0), CFG
+                     profit_margin=-5.0)
     )
     assert -1.0 <= score.value < 0
 
@@ -181,7 +181,7 @@ def _news(*headlines: str) -> list[NewsItem]:
 
 def test_no_news_is_flagged_unavailable_not_neutral():
     # The permanent state for BIST names — Finnhub does not cover them.
-    score = sentiment_score([], CFG)
+    score = sentiment_score([])
     assert score.value == 0.0
     assert score.available is False
     assert score.notes == ["no recent news"]
@@ -189,28 +189,28 @@ def test_no_news_is_flagged_unavailable_not_neutral():
 
 def test_headlines_without_lexicon_hits_are_a_real_neutral_reading():
     """Headlines that exist but read neutral ARE an opinion, so they count."""
-    score = sentiment_score(_news("Company files routine quarterly paperwork"), CFG)
+    score = sentiment_score(_news("Company files routine quarterly paperwork"))
     assert score.value == 0.0
     assert score.available is True
     assert "1 headlines" in score.notes[0]
 
 
 def test_positive_headlines_score_positive_and_negative_score_negative():
-    assert sentiment_score(_news("Firm beats estimates, shares rally"), CFG).value > 0
-    assert sentiment_score(_news("Firm misses estimates, shares plunge"), CFG).value < 0
+    assert sentiment_score(_news("Firm beats estimates, shares rally")).value > 0
+    assert sentiment_score(_news("Firm misses estimates, shares plunge")).value < 0
 
 
 def test_sentiment_is_clamped_so_it_can_nudge_but_never_dominate():
     # Ten unambiguously positive headlines still cannot exceed +0.5.
-    score = sentiment_score(_news(*(["beats surge record upgrade"] * 10)), CFG)
+    score = sentiment_score(_news(*(["beats surge record upgrade"] * 10)))
     assert score.value == pytest.approx(0.5)
 
 
 def test_sentiment_is_clamped_on_the_negative_side_too():
-    score = sentiment_score(_news(*(["misses plunge downgrade fraud"] * 10)), CFG)
+    score = sentiment_score(_news(*(["misses plunge downgrade fraud"] * 10)))
     assert score.value == pytest.approx(-0.5)
 
 
 def test_mixed_headlines_partially_cancel():
-    score = sentiment_score(_news("beats rally", "misses plunge"), CFG)
+    score = sentiment_score(_news("beats rally", "misses plunge"))
     assert score.value == pytest.approx(0.0)
