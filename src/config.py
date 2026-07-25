@@ -79,7 +79,7 @@ class Settings:
             telegram_bot_token=_require("TELEGRAM_BOT_TOKEN"),
             telegram_owner_id=owner_id,
             anthropic_api_key=anthropic,
-            anthropic_model=os.getenv("ANTHROPIC_MODEL", "claude-opus-4-8").strip(),
+            anthropic_model=os.getenv("ANTHROPIC_MODEL", "claude-opus-5").strip(),
             finnhub_api_key=finnhub,
             digest_timezone=os.getenv("DIGEST_TIMEZONE", "Europe/Istanbul").strip(),
             digest_time=os.getenv("DIGEST_TIME", "08:30").strip(),

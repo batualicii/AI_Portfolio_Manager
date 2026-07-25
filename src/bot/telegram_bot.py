@@ -245,13 +245,17 @@ class PortfolioBot:
         recos = await asyncio.to_thread(self._engine.scan, holdings)
         # Enrich with plain-language rationale (explanation-only; falls back to
         # deterministic notes if the narrator is absent or the API errors).
+        narration_error = None
         if self._narrator is not None:
-            recos = await asyncio.to_thread(self._narrator.narrate, recos)
+            recos, narration_error = await asyncio.to_thread(
+                self._narrator.narrate, recos
+            )
         # Persist to the audit trail so performance can be reviewed later.
         for r in recos:
             self._store.log_recommendation(r)
         held_keys = {(h.symbol.upper(), h.market) for h in holdings}
         text = format_recommendations(recos, header="Signal scan", held_keys=held_keys)
+        text += _narration_warning(narration_error)
         await self._send_chunked(update, msg, text)
 
     async def _send_chunked(self, update, placeholder, text: str) -> None:
@@ -276,8 +280,9 @@ class PortfolioBot:
         holdings = self._store.list_holdings()
         report = self._valuation.value(holdings)
         recos = self._engine.scan(holdings)
+        narration_error = None
         if self._narrator is not None:
-            recos = self._narrator.narrate(recos)
+            recos, narration_error = self._narrator.narrate(recos)
         for r in recos:
             self._store.log_recommendation(r)
 
@@ -291,7 +296,10 @@ class PortfolioBot:
         signals = format_recommendations(
             recos, header="Today's signals", held_keys=held_keys
         )
-        return f"{header}\n\n{valuation}\n\n{signals}"
+        return (
+            f"{header}\n\n{valuation}\n\n{signals}"
+            + _narration_warning(narration_error)
+        )
 
     async def _daily_digest(self) -> None:
         """Scheduled 08:30 callback — build the digest and push it to the owner."""
@@ -338,6 +346,18 @@ class PortfolioBot:
 
 
 # --------------------------- small parse helpers ---------------------------
+
+def _narration_warning(error: str | None) -> str:
+    """Surface a broken narrator instead of quietly shipping the terse notes.
+
+    The fallback output is perfectly usable, which is the problem: a narrator that
+    fails every call is indistinguishable from one that was never configured, and
+    that is how a stale SDK pin disabled this layer unnoticed.
+    """
+    if not error:
+        return ""
+    return f"\n\n⚠️ _Explanation layer unavailable ({error}); showing computed notes._"
+
 
 _TG_LIMIT = 4000  # safely under Telegram's 4096 hard cap
 
