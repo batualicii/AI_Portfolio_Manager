@@ -132,6 +132,21 @@ design; they are the boundaries of what the evidence actually covers.
   of the same watchlist**: that reference holds the bias constant, so the gap between the
   strategy and the equal-weight universe is timing, while the gap to the index is mostly
   selection. Judge the strategy on the former.
+- **The shared universe does not cancel the bias for a *selection* strategy.** The bullet
+  above holds for the tactical engine, which trades a fixed list: bias hits both sides
+  roughly equally. It does **not** hold for `hold_engine.py`, which ranks and concentrates —
+  a static equal-weight holder is barely affected, while a momentum selector loads up on
+  exactly the names whose survival was guaranteed by construction. Removing it requires
+  point-in-time membership (`scripts/build_pit_universe.py` → `HoldBacktester(members_at=…)`),
+  not a shared universe. **Measured, 2017–2026: the bias was worth +36.4 pp/year**, and that
+  is a lower bound because only ~48% of dropped names can still be priced. Any figure in this
+  repo produced without `members_at` is inflated by roughly that much and must not be quoted.
+- **An edge concentrated in two years is not an edge yet.** After removing the bias, the
+  selection strategy beat point-in-time equal-weight by +11.7 pp/year on average — but ~92%
+  of the total came from 2024 and 2026, both inside one semiconductor/AI regime, and 2026 is
+  a partial year. The remaining eight years average +1.2 pp. Mean well above median is the
+  signature of a couple of large wins, not of repeatable skill. Before this counts as
+  evidence, the sector explanation has to be excluded (`scripts/hold_sector_neutral.py`).
 - **No historical fundamentals or news.** Free history does not exist for either, so the
   fundamental and sentiment sub-scores are inert in every backtest. Only the
   technical + macro backbone — 70% of the live weight — is ever validated.

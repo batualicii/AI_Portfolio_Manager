@@ -17,9 +17,13 @@ Four deliberate differences from the tactical backtester:
   * **Equal weight** across the held names, so the result measures selection and
     not a sizing scheme layered on top.
 
-The benchmark that matters is the equal-weight hold of the *same* universe. Both
-sides then draw from the same survivorship-biased pool (SPEC section 6c), so the
-bias largely cancels and what is left is selection skill.
+The benchmark that matters is the equal-weight hold of the *same* universe, so
+both sides draw from the same pool. That is necessary but **not** sufficient here:
+survivorship bias does not cancel between them. A static equal-weight holder is
+barely affected by it, while a momentum selector concentrates precisely into the
+names whose survival was guaranteed by construction. Removing it therefore needs
+point-in-time membership (`members_at`), not just a shared universe — see
+`pit_equal_weight_curve` below and SPEC section 6c.
 """
 from __future__ import annotations
 
@@ -125,6 +129,41 @@ def top_by_score(ranked: list[tuple[float, str]], top_n: int) -> list[str]:
     """Default selector: take the highest-scoring names."""
     ranked = sorted(ranked, reverse=True)
     return [sym for _, sym in ranked[:top_n]]
+
+
+def sector_capped_selector(
+    sectors: dict[str, str], max_per_sector: int = 2, unknown: str = "Unknown"
+):
+    """Take the highest-scoring names, but no more than `max_per_sector` per sector.
+
+    A 12-1 momentum ranking has no notion of what a company does, so in a strong
+    sectoral trend it will happily fill the whole book with one industry. The
+    return that follows is then a bet on that industry, not evidence that the
+    ranking picks companies well — and the two are indistinguishable until the
+    concentration is removed.
+
+    Capping per sector is the cheapest way to tell them apart: if the edge
+    survives, the ranking is doing something; if it disappears, the edge *was*
+    the sector.
+
+    Symbols missing from the map share a single `unknown` bucket, which is the
+    constraining choice rather than the permissive one — an unmapped name cannot
+    slip past the cap. Callers should report map coverage alongside any result.
+    """
+    def pick(ranked: list[tuple[float, str]], top_n: int) -> list[str]:
+        chosen: list[str] = []
+        used: dict[str, int] = {}
+        for _, sym in sorted(ranked, reverse=True):
+            bucket = sectors.get(sym) or unknown
+            if used.get(bucket, 0) >= max_per_sector:
+                continue
+            chosen.append(sym)
+            used[bucket] = used.get(bucket, 0) + 1
+            if len(chosen) >= top_n:
+                break
+        return chosen
+
+    return pick
 
 
 class HoldBacktester:

@@ -318,3 +318,72 @@ def test_a_point_in_time_run_benchmarks_against_members_only():
     assert result.universe_metrics.total_return_pct == pytest.approx(
         result.metrics.total_return_pct, rel=0.25
     )
+
+
+# ------------------------- sector-capped selection --------------------------
+
+def test_the_sector_cap_skips_past_a_full_sector_to_the_next_best_name():
+    """The point of the cap: the 3rd tech name loses its slot to the best non-tech."""
+    from src.backtest.hold_engine import sector_capped_selector
+
+    sectors = {"T1": "Tech", "T2": "Tech", "T3": "Tech", "H1": "Health"}
+    pick = sector_capped_selector(sectors, max_per_sector=2)
+    ranked = [(0.9, "T1"), (0.8, "T2"), (0.7, "T3"), (0.1, "H1")]
+
+    assert pick(ranked, 3) == ["T1", "T2", "H1"]
+
+
+def test_the_sector_cap_preserves_score_order_within_the_cap():
+    from src.backtest.hold_engine import sector_capped_selector
+
+    sectors = {"A": "Energy", "B": "Energy"}
+    pick = sector_capped_selector(sectors, max_per_sector=2)
+    assert pick([(0.2, "B"), (0.9, "A")], 2) == ["A", "B"]
+
+
+def test_unmapped_symbols_share_one_bucket_rather_than_escaping_the_cap():
+    """An unmapped name must not become a free slot — that would defeat the test."""
+    from src.backtest.hold_engine import sector_capped_selector
+
+    pick = sector_capped_selector({"H1": "Health"}, max_per_sector=1)
+    ranked = [(0.9, "X"), (0.8, "Y"), (0.7, "H1")]
+
+    assert pick(ranked, 3) == ["X", "H1"]  # Y is a second Unknown, so it is skipped
+
+
+def test_the_sector_cap_returns_fewer_names_when_it_cannot_fill_the_book():
+    from src.backtest.hold_engine import sector_capped_selector
+
+    pick = sector_capped_selector({"A": "Tech", "B": "Tech"}, max_per_sector=1)
+    assert pick([(0.9, "A"), (0.8, "B")], 8) == ["A"]
+
+
+def test_a_cap_wide_enough_to_never_bind_matches_the_plain_ranking():
+    from src.backtest.hold_engine import sector_capped_selector, top_by_score
+
+    sectors = {"A": "Tech", "B": "Tech", "C": "Tech"}
+    ranked = [(0.5, "B"), (0.9, "A"), (0.1, "C")]
+    pick = sector_capped_selector(sectors, max_per_sector=99)
+    assert pick(ranked, 3) == top_by_score(ranked, 3)
+
+
+def test_the_sector_cap_drives_a_real_run_away_from_the_hottest_sector():
+    """End to end: the cap must change what the backtester actually holds."""
+    from src.backtest.hold_engine import sector_capped_selector
+
+    bars = {"T1": momentum_uptrend(400, daily_pct=0.010),
+            "T2": momentum_uptrend(400, daily_pct=0.009),
+            "H1": momentum_uptrend(400, daily_pct=0.002)}
+    provider = _provider(bars, momentum_uptrend(400))
+    cfg, hold = _cfg("T1", "T2", "H1"), dataclasses.replace(HOLD, top_n=2)
+
+    uncapped = HoldBacktester(Market.US, provider, cfg=cfg, hold=hold).run()
+    capped = HoldBacktester(
+        Market.US, provider, cfg=cfg, hold=hold,
+        selector=sector_capped_selector(
+            {"T1": "Tech", "T2": "Tech", "H1": "Health"}, max_per_sector=1
+        ),
+    ).run()
+
+    assert all(set(h) == {"T1", "T2"} for _, h in uncapped.holdings_log)
+    assert all(set(h) == {"T1", "H1"} for _, h in capped.holdings_log)

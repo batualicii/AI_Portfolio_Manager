@@ -64,6 +64,55 @@ Note this window contains no sustained bear market — the one regime where the
 satellite's downside protection is supposed to earn its keep. That is an argument
 for testing it on 2008/2020-style data, not for trading it now.
 
+## The selection experiment — what replaced timing, and where it stands
+
+Since holding beat trading, the question changed from *when should I be in?* to
+*which names should I hold?* `src/backtest/hold_engine.py` answers the second one:
+12-1 momentum, top 8 equal-weighted, quarterly rebalance, **no stops** — being
+shaken out is what destroys a hold strategy.
+
+Three claims were tested and two of them died:
+
+1. **875% over the S&P 500, top 8.** Retired. That run used *today's* index
+   membership, so every company that fell out of the index over the window was
+   missing — which is exactly where momentum's worst outcomes live.
+2. **The equal-weight universe cancels the bias.** Wrong for a selector. It holds
+   for a static holder, but a momentum rule concentrates into precisely the names
+   whose survival was guaranteed by construction.
+3. **The edge survives point-in-time membership.** Partly, and unevenly.
+
+`scripts/build_pit_universe.py` reconstructs membership by walking Wikipedia's
+change table backwards, recovering 236 names that were in the index and are not
+today. Running both legs in that universe (`scripts/hold_pit_compare.py`), 2017–2026:
+
+| | measured |
+|---|---|
+| survivorship bias | **+36.4 pp/year** — every earlier figure was inflated by roughly this much |
+| edge over point-in-time equal-weight | +11.7 pp/year mean, **+6.1 median**, beat it 6/10 years |
+| where the edge comes from | 107.5 of 117.2 total points (**~92%**) came from 2024 and 2026 alone |
+| the other 8 years | **+1.2 pp/year** — indistinguishable from zero |
+
+The mean/median split and the two-year concentration say the same thing: this is
+not a strategy that wins a little most years, it is one that won twice. 2026 — the
+single largest contributor at +67.3 — is a partial year, and 2024–2026 is one
+semiconductor/AI regime. The losing years are not small either (2019 −13.5, 2023 −9.1).
+
++36.4 pp is a **lower bound** on the bias: only ~48% of the dropped names can still
+be priced, so the rest remain silently excluded even from the point-in-time leg.
+
+**Open question, and the next test:** whether the edge is company selection or one
+sector bet wearing its clothes. `scripts/hold_sector_neutral.py` caps the book at
+N names per GICS sector and re-runs both legs. If the edge survives the cap, the
+sector explanation is excluded; if it collapses, the return was the sector.
+
+```bash
+python -m scripts.build_pit_universe --check   # membership + price coverage
+python -m scripts.build_sector_map             # GICS sector per symbol
+python -m scripts.hold_sector_neutral          # does the edge survive the cap?
+```
+
+Nothing here clears the SPEC §6b gate. Ten years, one selector, one market.
+
 ## Setup
 
 ```bash
