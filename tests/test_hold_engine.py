@@ -184,3 +184,35 @@ def test_the_window_can_be_restricted_for_walk_forward_folds():
     result = HoldBacktester(Market.US, provider, cfg=_cfg("A", "B"), hold=hold).run()
     assert str(result.equity.index[0].date()) >= "2023-09-01"
     assert str(result.equity.index[-1].date()) <= "2023-12-01"
+
+
+# ------------------------- swappable selector ------------------------------
+
+def test_a_custom_selector_overrides_the_momentum_ranking():
+    """The null test depends on this: same simulation, different picking rule."""
+    bars = {"A": momentum_uptrend(400), "B": momentum_downtrend(400)}
+    provider = _provider(bars, momentum_uptrend(400))
+
+    always_b = lambda ranked, top_n: ["B"]  # noqa: E731
+    result = HoldBacktester(
+        Market.US, provider, cfg=_cfg("A", "B"), hold=dataclasses.replace(HOLD, top_n=1),
+        selector=always_b,
+    ).run()
+
+    assert result.holdings_log
+    assert all(held == ["B"] for _, held in result.holdings_log)
+
+
+def test_the_default_selector_still_takes_the_highest_scores():
+    from src.backtest.hold_engine import top_by_score
+    ranked = [(0.1, "LOW"), (0.9, "HIGH"), (0.5, "MID")]
+    assert top_by_score(ranked, 2) == ["HIGH", "MID"]
+
+
+def test_a_selector_may_return_fewer_names_than_requested():
+    bars = {"A": momentum_uptrend(400), "B": momentum_uptrend(400, daily_pct=0.004)}
+    provider = _provider(bars, momentum_uptrend(400))
+    one_only = lambda ranked, top_n: [ranked[0][1]]  # noqa: E731
+    result = HoldBacktester(Market.US, provider, cfg=_cfg("A", "B"),
+                            hold=HOLD, selector=one_only).run()
+    assert all(len(held) == 1 for _, held in result.holdings_log)

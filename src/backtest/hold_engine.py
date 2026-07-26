@@ -85,6 +85,15 @@ def momentum_12_1(close: pd.Series, cfg: HoldConfig) -> float | None:
     return end / start - 1.0
 
 
+Selector = "Callable[[list[tuple[float, str]], int], list[str]]"
+
+
+def top_by_score(ranked: list[tuple[float, str]], top_n: int) -> list[str]:
+    """Default selector: take the highest-scoring names."""
+    ranked = sorted(ranked, reverse=True)
+    return [sym for _, sym in ranked[:top_n]]
+
+
 class HoldBacktester:
     def __init__(
         self,
@@ -92,11 +101,15 @@ class HoldBacktester:
         provider: MarketDataProvider,
         cfg: SignalConfig | None = None,
         hold: HoldConfig | None = None,
+        selector=None,
     ) -> None:
         self._market = market
         self._provider = provider
         self._cfg = cfg or SignalConfig()
         self._hold = hold or HoldConfig()
+        # Swappable so the same simulation can be driven by a random pick, which
+        # is how we measure whether the ranking beats luck within this universe.
+        self._selector = selector or top_by_score
 
     def _load_panel(self) -> tuple[dict[str, pd.DataFrame], pd.DataFrame]:
         panel: dict[str, pd.DataFrame] = {}
@@ -168,8 +181,7 @@ class HoldBacktester:
                         ranked.append((score, sym))
 
                 if ranked:
-                    ranked.sort(reverse=True)
-                    chosen = [sym for _, sym in ranked[: hold.top_n]]
+                    chosen = self._selector(ranked, hold.top_n)
                     equity_now = portfolio_value(day)
                     target_value = equity_now / len(chosen)
 
