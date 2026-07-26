@@ -341,14 +341,41 @@ def test_the_sector_cap_preserves_score_order_within_the_cap():
     assert pick([(0.2, "B"), (0.9, "A")], 2) == ["A", "B"]
 
 
-def test_unmapped_symbols_share_one_bucket_rather_than_escaping_the_cap():
-    """An unmapped name must not become a free slot — that would defeat the test."""
+def test_unmapped_symbols_are_exempt_from_the_cap_by_default():
+    """The default must not throttle unmapped names as a group.
+
+    The names that cannot be sectored are almost exactly the index dropouts that
+    point-in-time membership puts back. Sharing one bucket would suppress exposure
+    to the honest half of the universe and drag the result back toward the
+    survivorship-inflated answer, so the cap leaves them alone unless asked not to.
+    """
     from src.backtest.hold_engine import sector_capped_selector
 
     pick = sector_capped_selector({"H1": "Health"}, max_per_sector=1)
-    ranked = [(0.9, "X"), (0.8, "Y"), (0.7, "H1")]
+    assert pick([(0.9, "X"), (0.8, "Y"), (0.7, "H1")], 3) == ["X", "Y", "H1"]
 
-    assert pick(ranked, 3) == ["X", "H1"]  # Y is a second Unknown, so it is skipped
+
+def test_the_shared_policy_puts_every_unmapped_name_in_one_bucket():
+    from src.backtest.hold_engine import sector_capped_selector
+
+    pick = sector_capped_selector({"H1": "Health"}, max_per_sector=1,
+                                  unknown_policy="shared")
+    assert pick([(0.9, "X"), (0.8, "Y"), (0.7, "H1")], 3) == ["X", "H1"]
+
+
+def test_the_exclude_policy_drops_unmapped_names_entirely():
+    from src.backtest.hold_engine import sector_capped_selector
+
+    pick = sector_capped_selector({"H1": "Health"}, max_per_sector=1,
+                                  unknown_policy="exclude")
+    assert pick([(0.9, "X"), (0.8, "Y"), (0.7, "H1")], 3) == ["H1"]
+
+
+def test_an_unrecognised_unknown_policy_is_refused_rather_than_guessed():
+    from src.backtest.hold_engine import sector_capped_selector
+
+    with pytest.raises(ValueError):
+        sector_capped_selector({}, unknown_policy="skip")
 
 
 def test_the_sector_cap_returns_fewer_names_when_it_cannot_fill_the_book():

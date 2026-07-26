@@ -131,8 +131,11 @@ def top_by_score(ranked: list[tuple[float, str]], top_n: int) -> list[str]:
     return [sym for _, sym in ranked[:top_n]]
 
 
+UNKNOWN_POLICIES = ("own", "shared", "exclude")
+
+
 def sector_capped_selector(
-    sectors: dict[str, str], max_per_sector: int = 2, unknown: str = "Unknown"
+    sectors: dict[str, str], max_per_sector: int = 2, unknown_policy: str = "own"
 ):
     """Take the highest-scoring names, but no more than `max_per_sector` per sector.
 
@@ -146,16 +149,45 @@ def sector_capped_selector(
     survives, the ranking is doing something; if it disappears, the edge *was*
     the sector.
 
-    Symbols missing from the map share a single `unknown` bucket, which is the
-    constraining choice rather than the permissive one — an unmapped name cannot
-    slip past the cap. Callers should report map coverage alongside any result.
+    **What to do with symbols missing from the map decides the answer**, so it is
+    a parameter rather than a default buried in the code. The names that cannot be
+    sectored are almost exactly the ones that dropped out of the index — the group
+    point-in-time membership exists to put back — so any handling of them tilts
+    the result in a knowable direction:
+
+      ``own``     each unmapped symbol gets its own bucket, so the cap never binds
+                  on them. The cap still bites where the suspicion lives (a
+                  concentration among mapped, currently-listed names), and the
+                  restored dropouts are left alone. Where unmapped names dominate
+                  a year, the capped leg simply stops differing from the uncapped
+                  one — uninformative, which is far better than biased.
+      ``shared``  all unmapped symbols compete for one bucket's slots. This
+                  suppresses exposure to precisely the honest half of the universe,
+                  pulling the result back toward the survivorship-inflated answer.
+                  Pessimistic bound.
+      ``exclude`` unmapped symbols cannot be held at all. That re-deletes the
+                  dropouts, which is the original bias. Optimistic bound.
+
+    Run all three and the truth is bracketed: if the verdict is the same under
+    each, the coverage gap did not decide it.
     """
+    if unknown_policy not in UNKNOWN_POLICIES:
+        raise ValueError(f"unknown_policy must be one of {UNKNOWN_POLICIES}")
+
+    def bucket_for(sym: str) -> str | None:
+        sector = sectors.get(sym)
+        if sector:
+            return sector
+        if unknown_policy == "exclude":
+            return None
+        return "Unknown" if unknown_policy == "shared" else f"\0unmapped\0{sym}"
+
     def pick(ranked: list[tuple[float, str]], top_n: int) -> list[str]:
         chosen: list[str] = []
         used: dict[str, int] = {}
         for _, sym in sorted(ranked, reverse=True):
-            bucket = sectors.get(sym) or unknown
-            if used.get(bucket, 0) >= max_per_sector:
+            bucket = bucket_for(sym)
+            if bucket is None or used.get(bucket, 0) >= max_per_sector:
                 continue
             chosen.append(sym)
             used[bucket] = used.get(bucket, 0) + 1

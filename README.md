@@ -105,6 +105,13 @@ sector bet wearing its clothes. `scripts/hold_sector_neutral.py` caps the book a
 N names per GICS sector and re-runs both legs. If the edge survives the cap, the
 sector explanation is excluded; if it collapses, the return was the sector.
 
+About a fifth of the historical universe cannot be sectored — a company delisted
+hard enough to lose its ticker also loses its data, and those are precisely the
+dropouts point-in-time membership restored. How they are handled would otherwise
+decide the answer quietly, so the capped leg runs under all three handlings
+(exclude = optimistic, own = middle, shared = pessimistic) and a verdict is only
+reported when they agree.
+
 ```bash
 python -m scripts.build_pit_universe --check   # membership + price coverage
 python -m scripts.build_sector_map             # GICS sector per symbol

@@ -72,7 +72,12 @@ def main() -> int:
     known: dict[str, str] = {}
     if OUT.exists():
         known = dict(json.loads(OUT.read_text()).get("sectors", {}))
-        print(f"resuming from {OUT.relative_to(ROOT)} ({len(known)} already mapped)")
+        # Two different denominators, so report both: the file also holds names
+        # added to the index after the point-in-time snapshot was built, and
+        # counting those as coverage would overstate it.
+        in_universe = sum(1 for s in symbols if s in known)
+        print(f"resuming from {OUT.relative_to(ROOT)}: {len(known)} entries, "
+              f"{in_universe} of them in this universe")
 
     print("fetching Wikipedia sector column...", flush=True)
     from_wiki = wikipedia_sectors(_fetch(WIKI))
@@ -85,6 +90,7 @@ def main() -> int:
     print(f"  mapped:   {len(symbols) - len(missing)}")
     print(f"  missing:  {len(missing)} (dropped names Wikipedia no longer lists)")
 
+    resolved_now = attempted = 0
     if missing and not args.no_yahoo:
         from src.market.yahoo import YahooProvider
         from src.models import Market
@@ -93,18 +99,18 @@ def main() -> int:
         print(f"\n  querying Yahoo for {len(todo)} of them "
               f"(slow; safe to interrupt and re-run)...", flush=True)
         provider = YahooProvider()
-        found = 0
         for i, sym in enumerate(todo, 1):
             try:
                 sector = provider.get_fundamentals(sym, Market.US).sector
             except Exception:  # noqa: BLE001 — a delisted name failing is the norm here
                 sector = None
+            attempted += 1
             if sector:
                 known[sym] = sector
-                found += 1
+                resolved_now += 1
             if i % 25 == 0:
-                print(f"    {i}/{len(todo)} · {found} resolved", flush=True)
-        print(f"    done: {found}/{len(todo)} resolved")
+                print(f"    {i}/{len(todo)} · {resolved_now} resolved", flush=True)
+        print(f"    done: {resolved_now}/{len(todo)} resolved")
 
     covered = sum(1 for s in symbols if s in known)
     coverage = covered / len(symbols) if symbols else 0.0
@@ -126,13 +132,19 @@ def main() -> int:
     print(f"\n  coverage: {covered}/{len(symbols)} ({coverage * 100:.0f}%)")
     print(f"  wrote {OUT.relative_to(ROOT)}")
 
-    if coverage < 0.85:
-        print("\n  ⚠️  Below 85%: too many names fall into the shared 'Unknown' bucket, "
-              "\n  so a sector cap would throttle the unmapped names as a group rather "
-              "\n  than spreading the book across industries. Re-run to fill the gaps "
-              "\n  before trusting a sector-neutral result.")
-    else:
-        print("\n  Next: python -m scripts.hold_sector_neutral")
+    if attempted and resolved_now == 0:
+        print("\n  Nothing new resolved this pass. The remaining names are not a "
+              "\n  rate-limit problem: a company delisted hard enough to lose its "
+              "\n  ticker has no data left to query, so re-running will keep "
+              "\n  returning zero. Stop retrying.")
+    if coverage < 1.0:
+        print(f"\n  {len(symbols) - covered} names stay unmapped, and they are almost "
+              "\n  entirely index dropouts — the group point-in-time membership exists "
+              "\n  to put back. That makes their handling consequential rather than a "
+              "\n  rounding error, which is why `hold_sector_neutral` runs the capped "
+              "\n  leg under all three handlings and only calls a verdict when they "
+              "\n  agree. A gap here does not block the test; it is priced into it.")
+    print("\n  Next: python -m scripts.hold_sector_neutral")
     return 0
 
 
