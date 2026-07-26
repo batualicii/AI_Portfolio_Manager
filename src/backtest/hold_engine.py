@@ -102,6 +102,7 @@ class HoldBacktester:
         cfg: SignalConfig | None = None,
         hold: HoldConfig | None = None,
         selector=None,
+        members_at=None,
     ) -> None:
         self._market = market
         self._provider = provider
@@ -110,6 +111,12 @@ class HoldBacktester:
         # Swappable so the same simulation can be driven by a random pick, which
         # is how we measure whether the ranking beats luck within this universe.
         self._selector = selector or top_by_score
+        # Optional date -> set[str] of index members on that date. Without it the
+        # whole configured universe is eligible on every date, which means the
+        # run silently assumes today's membership held in the past — the
+        # survivorship bias described in SPEC section 6c. Supplying it restricts
+        # each decision to the names actually available at the time.
+        self._members_at = members_at
 
     def _load_panel(self) -> tuple[dict[str, pd.DataFrame], pd.DataFrame]:
         panel: dict[str, pd.DataFrame] = {}
@@ -173,8 +180,11 @@ class HoldBacktester:
 
         for i, day in enumerate(dates):
             if i % hold.rebalance_days == 0:
+                eligible = self._members_at(day) if self._members_at else None
                 ranked: list[tuple[float, str]] = []
                 for sym, df in panel.items():
+                    if eligible is not None and sym not in eligible:
+                        continue  # not in the index on this date
                     window = df["close"].loc[:day]
                     score = momentum_12_1(window, hold)
                     if score is not None and price(sym, day) is not None:

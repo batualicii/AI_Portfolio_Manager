@@ -216,3 +216,52 @@ def test_a_selector_may_return_fewer_names_than_requested():
     result = HoldBacktester(Market.US, provider, cfg=_cfg("A", "B"),
                             hold=HOLD, selector=one_only).run()
     assert all(len(held) == 1 for _, held in result.holdings_log)
+
+
+# --------------------- point-in-time index membership ----------------------
+
+def test_names_outside_the_index_on_that_date_are_not_eligible():
+    """Without this the run assumes today's membership held in the past.
+
+    That assumption is what deletes momentum's worst outcomes from the data —
+    the names it bought near a top and rode down until they left the index.
+    """
+    bars = {"MEMBER": momentum_uptrend(400, daily_pct=0.004),
+            "DROPPED": momentum_uptrend(400, daily_pct=0.010)}
+    provider = _provider(bars, momentum_uptrend(400))
+
+    # DROPPED has the stronger momentum, so it would be picked if eligible.
+    result = HoldBacktester(
+        Market.US, provider, cfg=_cfg("MEMBER", "DROPPED"),
+        hold=dataclasses.replace(HOLD, top_n=1),
+        members_at=lambda day: {"MEMBER"},
+    ).run()
+
+    assert result.holdings_log
+    assert all(held == ["MEMBER"] for _, held in result.holdings_log)
+
+
+def test_membership_can_change_over_time():
+    bars = {"EARLY": momentum_uptrend(400, daily_pct=0.004),
+            "LATE": momentum_uptrend(400, daily_pct=0.010)}
+    provider = _provider(bars, momentum_uptrend(400))
+    cutoff = pd.Timestamp("2023-06-01")
+
+    result = HoldBacktester(
+        Market.US, provider, cfg=_cfg("EARLY", "LATE"),
+        hold=dataclasses.replace(HOLD, top_n=1),
+        members_at=lambda day: {"EARLY"} if day < cutoff else {"LATE"},
+    ).run()
+
+    picks = {day: held[0] for day, held in result.holdings_log}
+    assert any(sym == "EARLY" for day, sym in picks.items() if day < cutoff)
+    assert any(sym == "LATE" for day, sym in picks.items() if day >= cutoff)
+
+
+def test_without_membership_every_configured_name_stays_eligible():
+    bars = {"A": momentum_uptrend(400), "B": momentum_uptrend(400, daily_pct=0.010)}
+    provider = _provider(bars, momentum_uptrend(400))
+    result = HoldBacktester(Market.US, provider, cfg=_cfg("A", "B"),
+                            hold=dataclasses.replace(HOLD, top_n=1)).run()
+    # B has stronger momentum and nothing filters it out.
+    assert all(held == ["B"] for _, held in result.holdings_log)
