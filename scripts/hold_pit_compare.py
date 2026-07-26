@@ -79,11 +79,15 @@ def main() -> int:
     print(f"  ever a member since {min(by_year)}: {len(ever_syms)} names "
           f"(+{len(ever_syms) - len(today_syms)} that have since dropped out)")
 
-    print(f"\n  {'Year':<7} {'today-only':>12} {'point-in-time':>15} {'gap':>9}"
-          f"   what the gap means")
-    print("  " + "-" * 78)
+    print(f"\n  Two questions, and they have different answers:"
+          f"\n    1. how much did the bias inflate the strategy's return?   (gap)"
+          f"\n    2. does the edge over a passive alternative survive?      (edge)")
 
-    gaps = []
+    print(f"\n  {'Year':<6} {'today':>9} {'PIT':>9} {'gap':>8} │ "
+          f"{'PIT EW':>9} {'edge':>8}   verdict")
+    print("  " + "-" * 76)
+
+    gaps, edges = [], []
     for year in range(args.from_year, args.to_year + 1):
         window = dict(trade_start=f"{year}-01-01", trade_end=f"{year}-12-31")
 
@@ -105,26 +109,49 @@ def main() -> int:
 
         b = biased.metrics.total_return_pct
         h = honest.metrics.total_return_pct
-        gap = b - h
+        # The benchmark computed inside the honest leg is membership-aware, so
+        # this is the passive alternative available in that same universe.
+        ew = honest.universe_metrics.total_return_pct
+        gap, edge = b - h, h - ew
         gaps.append(gap)
-        note = ("bias inflated the result" if gap > 2
-                else "no meaningful bias" if abs(gap) <= 2
-                else "point-in-time did better")
-        print(f"  {year:<7} {b:>11.1f}% {h:>14.1f}% {gap:>+8.1f}%   {note}")
+        edges.append(edge)
+
+        verdict = ("beat the passive alternative" if edge > 2
+                   else "matched it" if edge >= -2
+                   else "lost to it")
+        print(f"  {year:<6} {b:>8.1f}% {h:>8.1f}% {gap:>+7.1f}% │ "
+              f"{ew:>8.1f}% {edge:>+7.1f}%   {verdict}")
 
     if gaps:
-        print("  " + "-" * 78)
-        avg = sum(gaps) / len(gaps)
-        print(f"  average gap: {avg:+.1f} percentage points per year")
-        if avg > 5:
-            print("\n  VERDICT: a large part of the reported edge was survivorship bias. "
-                  "\n  Every earlier number in this repo overstates the strategy.")
-        elif avg > 2:
-            print("\n  VERDICT: bias accounts for a meaningful slice of the edge. "
-                  "\n  Earlier numbers need discounting, but something remains.")
+        print("  " + "-" * 76)
+        avg_gap = sum(gaps) / len(gaps)
+        avg_edge = sum(edges) / len(edges)
+        wins = sum(1 for e in edges if e > 0)
+        print(f"  average bias: {avg_gap:+.1f} pp/year   ·   "
+              f"average edge over PIT equal-weight: {avg_edge:+.1f} pp/year   ·   "
+              f"beat it {wins}/{len(edges)} years")
+
+        print()
+        if avg_gap > 5:
+            print("  On the bias: a large part of every earlier number in this repo was "
+                  "\n  survivorship. Those figures cannot be quoted again.")
+        elif avg_gap > 2:
+            print("  On the bias: a meaningful slice of the earlier numbers was "
+                  "survivorship.")
         else:
-            print("\n  VERDICT: the edge largely survives an honest universe. That is "
-                  "\n  the strongest evidence available here — though see the caveats.")
+            print("  On the bias: earlier numbers were not materially inflated.")
+
+        if avg_edge > 3 and wins >= len(edges) * 0.6:
+            print("  On the edge: the ranking still beats the passive alternative in an "
+                  "\n  honest universe, in most years. This is the first defensible "
+                  "\n  evidence of selection skill produced here.")
+        elif avg_edge > 0:
+            print("  On the edge: positive on average but inconsistent across years — "
+                  "\n  inside the range luck produces at this sample size. Not tradeable "
+                  "\n  on this evidence.")
+        else:
+            print("  On the edge: the ranking does NOT beat holding the index members "
+                  "\n  equally. Whatever remained after removing the bias is not skill.")
 
     print("\n  Caveats that remain even with this run:")
     print("   · dropped names Yahoo can no longer price are still absent, so the")

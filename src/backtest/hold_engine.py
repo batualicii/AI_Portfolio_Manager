@@ -69,6 +69,39 @@ class HoldResult:
     turnover_pct: float = 0.0
 
 
+def pit_equal_weight_curve(
+    panel: dict[str, pd.DataFrame], index, members_at=None
+) -> pd.Series:
+    """Equal-weight index of whoever was a member on each date.
+
+    `_equal_weight_curve` in engine.py holds every symbol in the panel for the
+    whole window, which is the right benchmark when the universe is fixed. It is
+    the wrong one here: the panel contains everyone who was *ever* a member, so
+    holding all of them from the start would credit the benchmark with positions
+    nobody could have owned yet.
+
+    Chained daily equal-weight returns across the current members, with no
+    trading costs — the convention index benchmarks are quoted under, and the
+    conservative choice, since charging a passive alternative for quarterly
+    rebalancing would flatter the strategy it is being compared against.
+    """
+    closes = pd.DataFrame({s: df["close"].reindex(index).ffill() for s, df in panel.items()})
+    daily = closes.pct_change()
+
+    if members_at is not None:
+        mask = pd.DataFrame(False, index=index, columns=closes.columns)
+        for day in index:
+            eligible = members_at(day)
+            for sym in closes.columns:
+                if sym in eligible:
+                    mask.loc[day, sym] = True
+        daily = daily.where(mask)
+
+    # Mean across whoever is eligible and priced on each day.
+    port = daily.mean(axis=1, skipna=True).fillna(0.0)
+    return (1.0 + port).cumprod()
+
+
 def momentum_12_1(close: pd.Series, cfg: HoldConfig) -> float | None:
     """Total return from `lookback` bars ago to `skip` bars ago.
 
@@ -231,7 +264,13 @@ class HoldBacktester:
         bench = idx_close.loc[equity.index[0]:].reindex(equity.index).ffill()
         bench = bench / float(bench.iloc[0]) * hold.start_equity
 
-        universe = _equal_weight_curve(panel, equity.index)
+        # With membership supplied, the benchmark must respect it too — otherwise
+        # the strategy is judged against a portfolio holding names that were not
+        # yet in the index, which is the same bias the run exists to remove.
+        if self._members_at is not None:
+            universe = pit_equal_weight_curve(panel, equity.index, self._members_at)
+        else:
+            universe = _equal_weight_curve(panel, equity.index)
         universe = universe / float(universe.iloc[0]) * hold.start_equity
 
         return HoldResult(

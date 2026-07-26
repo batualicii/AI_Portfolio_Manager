@@ -265,3 +265,56 @@ def test_without_membership_every_configured_name_stays_eligible():
                             hold=dataclasses.replace(HOLD, top_n=1)).run()
     # B has stronger momentum and nothing filters it out.
     assert all(held == ["B"] for _, held in result.holdings_log)
+
+
+# ------------------- membership-aware equal-weight benchmark ----------------
+
+def test_pit_equal_weight_excludes_non_members_from_the_benchmark():
+    """The benchmark must obey membership too, or the fix is half-done.
+
+    The panel holds everyone who was ever a member, so a benchmark that holds
+    all of them from day one credits itself with positions nobody could have
+    owned yet — reintroducing on the benchmark side the very bias the
+    point-in-time run exists to remove.
+    """
+    from src.backtest.hold_engine import pit_equal_weight_curve
+
+    index = pd.to_datetime(["2024-01-01", "2024-01-02", "2024-01-03"])
+    panel = {
+        "IN": pd.DataFrame({"close": [100.0, 110.0, 121.0]}, index=index),   # +10%/day
+        "OUT": pd.DataFrame({"close": [100.0, 50.0, 25.0]}, index=index),    # -50%/day
+    }
+    only_in = pit_equal_weight_curve(panel, index, members_at=lambda d: {"IN"})
+    both = pit_equal_weight_curve(panel, index, members_at=lambda d: {"IN", "OUT"})
+
+    assert only_in.iloc[-1] == pytest.approx(1.21)   # tracks IN alone
+    assert both.iloc[-1] < only_in.iloc[-1]          # dragged down by OUT
+
+
+def test_pit_equal_weight_without_membership_holds_everything():
+    from src.backtest.hold_engine import pit_equal_weight_curve
+
+    index = pd.to_datetime(["2024-01-01", "2024-01-02"])
+    panel = {
+        "A": pd.DataFrame({"close": [100.0, 120.0]}, index=index),  # +20%
+        "B": pd.DataFrame({"close": [100.0, 80.0]}, index=index),   # -20%
+    }
+    curve = pit_equal_weight_curve(panel, index)
+    assert curve.iloc[-1] == pytest.approx(1.0)  # +20% and -20% cancel
+
+
+def test_a_point_in_time_run_benchmarks_against_members_only():
+    bars = {"MEMBER": momentum_uptrend(400, daily_pct=0.004),
+            "NEVER": momentum_uptrend(400, daily_pct=0.012)}
+    provider = _provider(bars, momentum_uptrend(400))
+    result = HoldBacktester(
+        Market.US, provider, cfg=_cfg("MEMBER", "NEVER"),
+        hold=dataclasses.replace(HOLD, top_n=1),
+        members_at=lambda day: {"MEMBER"},
+    ).run()
+
+    # NEVER compounds far faster; if it leaked into the benchmark the strategy
+    # would look artificially bad against it.
+    assert result.universe_metrics.total_return_pct == pytest.approx(
+        result.metrics.total_return_pct, rel=0.25
+    )
