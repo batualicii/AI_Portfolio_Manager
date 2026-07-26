@@ -1,0 +1,28 @@
+name: tests
+
+# The suite is deliberately offline — it runs against a fake market-data
+# provider — so CI needs no API keys and no network access to the exchanges.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run tests
+        run: python -m pytest
+
+      - name: Check everything still compiles
+        run: python -m compileall -q src main.py scripts
