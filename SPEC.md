@@ -19,17 +19,29 @@ unacceptable risk. So the design was revised to what the evidence supports:
   with a mandatory stop, plus **risk alerts** on core holdings.
 - **Objective:** best **risk-adjusted** return (Sharpe / drawdown), not raw outperformance.
 
-> ⚠️ **The published validation numbers are stale and must be re-run.**
+> ⛔ **Re-validated 2026-07: the design does not currently meet this objective.**
+>
 > The earlier claim — a 70/30 blend keeping ~99% (US) / ~93% (BIST) of buy-and-hold
-> return with better Sharpe and shallower drawdowns — was produced by a backtest that
-> has since been corrected in two ways that change results (§6c): entries now fill at
-> the next bar's open rather than at the signal bar's close, and the honest benchmark
-> is now an equal-weight hold of the same watchlist rather than a broad index.
-> Re-run `python -m scripts.walk_forward` and `python -m scripts.run_backtest`, then
-> replace this paragraph with the real figures before relying on any of it.
+> return with better Sharpe and shallower drawdowns — was measured against a broad
+> *index*. Against an equal-weight hold of the same watchlist, which is the honest
+> comparison (§6c), it does not survive:
+>
+> | | Strategy | Equal-weight universe |
+> |---|---|---|
+> | US | 71.6% / Sharpe 1.00 / maxDD −14.9% | 252.6% / **1.40** / −23.3% |
+> | BIST | 163.5% / Sharpe 1.35 / maxDD −31.0% | 884.5% / **1.92** / −18.4% |
+>
+> Lower return *and* lower Sharpe in both markets. The satellite reduces US drawdown
+> (−14.9% vs −23.3%) but increases it in BIST (−31.0% vs −18.4%), and it costs 181
+> (US) / 721 (BIST) points of total return to do so. Walk-forward agrees: in BIST the
+> blend lost return in 5 of 5 years while beating drawdown in 5 of 5.
+>
+> So the tactical sleeve is a drawdown-reduction mechanism with a very high price,
+> not a source of edge. **The §6b gate is not met — revise before any real money.**
 
-- Still **in-sample**; needs walk-forward validation, and the satellite's downside
-  protection will matter most in a bear market not present in the test window.
+- The test window (2022-05 → 2026-07) contains **no sustained bear market**, which is
+  the regime the satellite's downside protection exists for. Its value there is
+  untested, and that is a reason to test further, not a reason to trade now.
 
 ## 1. Core behavior
 - **Advisory only** — recommends, never auto-trades. User executes in Midas manually.

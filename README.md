@@ -18,22 +18,51 @@ full design and the (important) honesty/risk notes.
 | 5 | Claude reasoning layer (explanation only) | ✅ Done |
 | 6 | Daily digest + 08:30 Europe/Istanbul scheduler | ✅ Done |
 | 7 | Offline test suite (169 tests, no network needed) | ✅ Done |
-| 8 | Re-run validation after the backtest corrections | ⬜ **You** |
+| 8 | Re-validate against an honest benchmark | ✅ Done — **strategy fails the gate** |
 
-**v1 feature-complete.** Remaining before real-money reliance: re-running the
-validation (below), and 24/7 hosting on a VPS so the 08:30 digest fires when your
-laptop is off.
+**Software is v1 feature-complete. The strategy is not.**
 
-**Strategy:** core-satellite — ~70% buy-and-hold core + ~30% tactical satellite,
-optimising risk-adjusted return (Sharpe, drawdown) rather than raw outperformance,
-which the Stage 4 backtest showed was not safely achievable here.
+## ⛔ Do not trade this yet — it fails its own validation gate
 
-> ⚠️ **The old performance numbers no longer apply.** The backtest was corrected in
-> two ways that change results: entries now fill at the next bar's open instead of
-> the signal bar's close, and the honest benchmark is an equal-weight hold of the
-> same watchlist rather than a broad index (the watchlist is survivorship-biased —
-> see [SPEC §6c](SPEC.md)). Re-run `python -m scripts.walk_forward` and
-> `python -m scripts.run_backtest`, then put the real figures here.
+SPEC §6b says the strategy must beat buy-and-hold before any real money, or the
+logic gets revised. Measured against the honest benchmark, it does not.
+
+Backtest 2022-05 → 2026-07. **Equal-weight universe** = buy and hold the same
+watchlist, never trading. That is the comparison that matters: the watchlist is a
+list of names that are large and successful *today*, so beating a broad index
+mostly measures that hindsight pick rather than the timing logic (SPEC §6c).
+
+| | Strategy | Equal-weight universe | Index |
+|---|---|---|---|
+| **US** return / Sharpe / maxDD | 71.6% / 1.00 / −14.9% | **252.6% / 1.40 / −23.3%** | 85.2% / 0.96 / −18.9% |
+| **BIST** return / Sharpe / maxDD | 163.5% / 1.35 / −31.0% | **884.5% / 1.92 / −18.4%** | 470.9% / 1.61 / −22.9% |
+
+The strategy trails the equal-weight universe by **181 points** of total return in
+the US and **721 points** in BIST, with a lower Sharpe in both. It is not a
+risk-adjusted win either — the only thing it buys is a shallower US drawdown
+(−14.9% vs −23.3%), and in BIST even that reverses (−31.0% vs −18.4%).
+
+289 US trades at a 50% win rate and 315 BIST trades at 51% is a coin flip paying
+commission on every flip.
+
+**Walk-forward, per calendar year** (70/30 blend vs buy & hold):
+
+| | better/equal Sharpe | kept return | shallower drawdown |
+|---|---|---|---|
+| US | 3/5 | 4/5 | 3/5 |
+| BIST | 2/5 | 2/5 | **5/5** |
+
+In the US the blend helped in 2024 (+4.5%) and 2026 YTD (+2.1%), hurt in 2023
+(−3.3%) and 2025 (−1.5%). In BIST it lost return every single year (2022 −11.6%,
+2025 −7.1%) while consistently reducing drawdown.
+
+**Read together:** the tactical sleeve is a drawdown-reduction tool that costs a
+great deal of return, not an alpha source. The honest summary is that holding the
+watchlist would have beaten trading it, in both markets, over this window.
+
+Note this window contains no sustained bear market — the one regime where the
+satellite's downside protection is supposed to earn its keep. That is an argument
+for testing it on 2008/2020-style data, not for trading it now.
 
 ## Setup
 
