@@ -1,7 +1,17 @@
-"""Telegram bot — the user's interface for keeping holdings in sync with Midas.
+"""Telegram bot — the owner's interface to their own reasoning.
 
-Stage 1 scope: import / list / update / remove positions, all owner-locked. The
-daily digest (Stage 5) will reuse `send_message` and the same Application.
+It keeps holdings in sync with Midas, records why each position is owned, and
+tells the owner when something they wrote at purchase has come true. It does not
+issue buy or sell calls; SPEC section 0 explains why that was removed rather than
+improved.
+
+Two schedules, and the split is the point:
+
+  * a **weekly** summary — positions, open theses, reviews due, trading pace. On a
+    multi-year horizon there is nothing new to say most mornings, and a daily
+    price message is itself a trading trigger.
+  * a **daily silent check** of every falsifier, which sends nothing unless one
+    fires. That is the only event worth interrupting someone for.
 
 Security: every handler is wrapped by `_owner_only`, so the bot ignores anyone
 whose Telegram id is not the configured owner. This is a personal, single-user bot.
@@ -10,7 +20,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from functools import wraps
 from typing import Awaitable, Callable
 from zoneinfo import ZoneInfo
@@ -29,13 +39,19 @@ from telegram.ext import (
 from src.bot.markdown import escape_md
 from src.config import Settings
 from src.market.provider import MarketDataProvider
-from src.models import Action, Holding, Market
+from src.models import Falsifier, FalsifierKind, Holding, Market, Thesis
 from src.portfolio.format import format_report
+from src.portfolio.guardrails import (
+    concentration_breaches,
+    sale_without_cause,
+    trade_pace,
+)
 from src.portfolio.valuation import ValuationService
 from src.reasoning.narrator import ClaudeNarrator
 from src.signals.engine import SignalEngine
-from src.signals.format import format_recommendations
 from src.storage.db import Store
+from src.thesis.format import format_alert, format_thesis, format_weekly
+from src.thesis.monitor import ThesisMonitor, fired, unevaluated
 
 log = logging.getLogger(__name__)
 
@@ -56,6 +72,9 @@ class PortfolioBot:
         self._settings = settings
         self._store = store
         self._valuation = ValuationService(provider)
+        self._monitor = ThesisMonitor(provider)
+        # Kept only so the research scripts and tests can still construct a bot;
+        # nothing on the live path calls it any more (SPEC section 0).
         self._engine = engine
         self._narrator = narrator
         self._scheduler: AsyncIOScheduler | None = None
@@ -73,14 +92,22 @@ class PortfolioBot:
         hh, mm = self._settings.digest_hour_minute
         self._scheduler = AsyncIOScheduler(timezone=tz)
         self._scheduler.add_job(
-            self._daily_digest,
-            CronTrigger(hour=hh, minute=mm, timezone=tz),
-            name="daily_digest",
+            self._weekly_summary,
+            CronTrigger(day_of_week="sun", hour=hh, minute=mm, timezone=tz),
+            name="weekly_summary",
             misfire_grace_time=3600,  # still fire if the host was briefly asleep
+        )
+        # Runs every day but stays silent unless a falsifier fires. A monitor
+        # that speaks daily trains the owner to stop reading it.
+        self._scheduler.add_job(
+            self._falsifier_watch,
+            CronTrigger(hour=hh, minute=mm, timezone=tz),
+            name="falsifier_watch",
+            misfire_grace_time=3600,
         )
         self._scheduler.start()
         log.info(
-            "Daily digest scheduled for %02d:%02d %s",
+            "Weekly summary Sundays %02d:%02d %s; silent falsifier check daily",
             hh, mm, self._settings.digest_timezone,
         )
 
@@ -99,9 +126,17 @@ class PortfolioBot:
             CommandHandler("holdings", self._owner_only(self._holdings))
         )
         self._app.add_handler(CommandHandler("value", self._owner_only(self._value)))
-        self._app.add_handler(CommandHandler("scan", self._owner_only(self._scan)))
+        self._app.add_handler(CommandHandler("thesis", self._owner_only(self._thesis)))
+        self._app.add_handler(CommandHandler("review", self._owner_only(self._review)))
+        self._app.add_handler(
+            CommandHandler("reviewed", self._owner_only(self._reviewed))
+        )
+        self._app.add_handler(CommandHandler("close", self._owner_only(self._close)))
+        self._app.add_handler(CommandHandler("check", self._owner_only(self._check)))
         self._app.add_handler(CommandHandler("digest", self._owner_only(self._digest_now)))
         self._app.add_handler(CommandHandler("log", self._owner_only(self._log)))
+        # /scan is deliberately absent. Producing ranked buy/sell calls is the
+        # behaviour this design removed, not a feature waiting to be restored.
 
     def _owner_only(self, handler: Handler) -> Handler:
         """Reject everyone except the configured owner id."""
@@ -148,18 +183,22 @@ class PortfolioBot:
 
     async def _start(self, update: Update, _: ContextTypes.DEFAULT_TYPE) -> None:
         await update.effective_message.reply_text(
-            "*AI Portfolio Manager* — advisory swing-trading assistant.\n\n"
-            "Keep your Midas positions in sync with these commands:\n"
-            "`/add US AAPL 10 185.50` — add/update 10 AAPL @ $185.50 avg\n"
-            "`/add BIST THYAO 100 280` — add/update 100 THYAO @ 280 TRY\n"
-            "`/remove US AAPL` — remove a position\n"
-            "`/holdings` — list current positions\n"
-            "`/value` — live prices, market value & unrealized P&L\n"
-            "`/scan` — run the signal engine: ranked buy/sell/hold calls\n"
-            "`/digest` — build today's full morning digest now\n"
-            "`/log` — recent recommendations\n\n"
-            "_The daily digest arrives automatically at "
-            f"{self._settings.digest_time} {self._settings.digest_timezone}._",
+            "*AI Portfolio Manager*\n"
+            "_It does not tell you what to buy. It remembers why you bought, and "
+            "tells you when what you wrote comes true._\n\n"
+            "*Positions*\n"
+            "`/add US AAPL 10 185.50` · `/remove US AAPL` · `/holdings` · `/value`\n\n"
+            "*Theses*\n"
+            "`/thesis` — list them\n"
+            "`/thesis NVDA` — one thesis and where each condition stands\n"
+            "`/thesis add US NVDA 100 4 | why I own it | trend:200/4 | growth:0.20`\n"
+            "`/check` — run every condition now\n"
+            "`/review` · `/reviewed NVDA [note]` · `/close NVDA <reason>`\n\n"
+            "*Reports*\n"
+            "`/digest` — the weekly summary now · `/log` — older signal history\n\n"
+            f"_Weekly summary Sundays at {self._settings.digest_time} "
+            f"{self._settings.digest_timezone}. Falsifiers are checked daily and "
+            "you only hear about it if one fires._",
             parse_mode=ParseMode.MARKDOWN,
         )
 
@@ -254,112 +293,253 @@ class PortfolioBot:
         report = await asyncio.to_thread(self._valuation.value, holdings)
         await msg.edit_text(format_report(report), parse_mode=ParseMode.MARKDOWN)
 
-    async def _scan(self, update: Update, _: ContextTypes.DEFAULT_TYPE) -> None:
-        """Run the signal engine over holdings + watchlist and report ranked calls."""
-        holdings = self._store.list_holdings()
-        msg = await update.effective_message.reply_text(
-            "🔍 Scanning markets… (pricing your holdings + watchlist, ~30s)"
-        )
-        recos = await asyncio.to_thread(self._engine.scan, holdings)
-        # Enrich with plain-language rationale (explanation-only; falls back to
-        # deterministic notes if the narrator is absent or the API errors).
-        narration_error = None
-        if self._narrator is not None:
-            recos, narration_error = await asyncio.to_thread(
-                self._narrator.narrate, recos
-            )
-        # Persist to the audit trail so performance can be reviewed later.
-        self._log_actionable(recos)
-        held_keys = {(h.symbol.upper(), h.market) for h in holdings}
-        text = format_recommendations(recos, header="Signal scan", held_keys=held_keys)
-        text += _narration_warning(narration_error)
-        await self._send_chunked(update, msg, text)
+    # ------------------------------ theses ------------------------------
 
-    async def _send_chunked(self, update, placeholder, text: str) -> None:
-        """Send `text` respecting Telegram's 4096-char limit: edit the placeholder
-        with the first chunk, then reply with any remaining chunks. Splits on line
-        boundaries so Markdown stays valid within each message, and falls back to
-        plain text per chunk if Telegram rejects the formatting."""
-        chunks = _split_for_telegram(text)
-        try:
-            await placeholder.edit_text(chunks[0], parse_mode=ParseMode.MARKDOWN)
-        except BadRequest as exc:
-            log.warning("Markdown rejected (%s); resending as plain text.", exc)
-            await placeholder.edit_text(chunks[0])
-        for chunk in chunks[1:]:
-            try:
-                await update.effective_message.reply_text(
-                    chunk, parse_mode=ParseMode.MARKDOWN
-                )
-            except BadRequest as exc:
-                log.warning("Markdown rejected (%s); resending as plain text.", exc)
-                await update.effective_message.reply_text(chunk)
+    async def _thesis(self, update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+        """/thesis [SYMBOL] — show one thesis, or list them all.
 
-    def _log_actionable(self, recos) -> None:
-        """Record the calls that ask the user to do something.
-
-        HOLDs are the steady state, not events: logging one per name per scan
-        buries the actual decisions under standing advice and turns /log into a
-        printout of a single morning. Repeats of the same call on the same day
-        are collapsed too, since /scan is run on demand and the digest fires
-        daily over the same signals.
+        /thesis add <US|BIST> <SYMBOL> <PRICE> <CONVICTION 1-5> | <why> | <falsifier>...
         """
-        for reco in recos:
-            if reco.action is Action.HOLD:
-                continue
-            self._store.log_recommendation(reco, dedupe_same_day=True)
+        args = ctx.args or []
+        if args and args[0].lower() == "add":
+            await self._thesis_add(update, " ".join(args[1:]))
+            return
 
-    # ------------------------------ digest ------------------------------
+        if not args:
+            theses = self._store.list_theses()
+            if not theses:
+                await update.effective_message.reply_text(
+                    "No theses yet. `/thesis add US NVDA 100 4 | why I own it | "
+                    "trend:200/4 | growth:0.20`\n\n"
+                    "A position without a written thesis cannot be monitored — "
+                    "there is nothing to check it against.",
+                    parse_mode=ParseMode.MARKDOWN,
+                )
+                return
+            lines = [f"*{len(theses)} open theses*", ""]
+            for t in theses:
+                lines.append(f"· *{t.symbol}* ({t.market.value}) conviction "
+                             f"{t.conviction}/5 — next review "
+                             f"{t.review_due_on():%d %b}")
+            await self._send_to_owner("\n".join(lines))
+            return
+
+        symbol = args[0].upper()
+        for market in (Market.US, Market.BIST):
+            thesis = self._store.get_thesis(symbol, market)
+            if thesis is not None:
+                checks = await asyncio.to_thread(self._monitor.check, thesis)
+                await self._send_to_owner(format_thesis(thesis, checks))
+                return
+        await update.effective_message.reply_text(f"No open thesis for {symbol}.")
+
+    async def _thesis_add(self, update: Update, raw: str) -> None:
+        """Parse and store a thesis. Refuses one with no checkable falsifier."""
+        head, *rest = [part.strip() for part in raw.split("|")]
+        fields = head.split()
+        if len(fields) < 4 or not rest:
+            await update.effective_message.reply_text(
+                "Usage:\n`/thesis add <US|BIST> <SYMBOL> <PRICE> <1-5> | "
+                "<why you own it> | <falsifier> [| <falsifier>...]`\n\n"
+                "Falsifiers:\n"
+                "`trend:200/4` — 4 weeks fully below the 200-day average\n"
+                "`drawdown:0.5` — 50% below the high since you bought\n"
+                "`growth:0.20` — revenue growth falls under 20%\n"
+                "`margin:0.10` — profit margin falls under 10%\n"
+                "`ask: a rival ships at scale` — for you to judge at review\n\n"
+                "At least one must be checkable by code.",
+                parse_mode=ParseMode.MARKDOWN,
+            )
+            return
+
+        market = _parse_market(fields[0])
+        if market is None:
+            await update.effective_message.reply_text("Market must be US or BIST.")
+            return
+        try:
+            price, conviction = float(fields[2]), int(fields[3])
+        except ValueError:
+            await update.effective_message.reply_text(
+                "Price must be a number and conviction an integer 1-5."
+            )
+            return
+
+        summary, *falsifier_specs = rest
+        falsifiers = []
+        for spec in falsifier_specs:
+            parsed = _parse_falsifier(spec)
+            if parsed is None:
+                await update.effective_message.reply_text(
+                    f"Could not read falsifier `{spec}` — see /thesis add usage.",
+                    parse_mode=ParseMode.MARKDOWN,
+                )
+                return
+            falsifiers.append(parsed)
+
+        thesis = Thesis(
+            symbol=fields[1].upper(), market=market,
+            opened_at=datetime.now(timezone.utc), entry_price=price,
+            conviction=max(1, min(5, conviction)), summary=summary,
+            falsifiers=tuple(falsifiers),
+        )
+        try:
+            self._store.open_thesis(thesis)
+        except ValueError as exc:
+            await update.effective_message.reply_text(str(exc))
+            return
+        except Exception as exc:  # noqa: BLE001 — e.g. one already open
+            await update.effective_message.reply_text(
+                f"Could not record it: {exc}. There may already be an open thesis "
+                f"for {thesis.symbol} — /close it first."
+            )
+            return
+        await self._send_to_owner(format_thesis(thesis))
+
+    async def _check(self, update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+        """/check — run every falsifier now and report, fired or not."""
+        theses = self._store.list_theses()
+        if not theses:
+            await update.effective_message.reply_text("No theses to check.")
+            return
+        for thesis in theses:
+            checks = await asyncio.to_thread(self._monitor.check, thesis)
+            await self._send_to_owner(format_thesis(thesis, checks))
+
+    async def _review(self, update: Update, _: ContextTypes.DEFAULT_TYPE) -> None:
+        """/review — which theses are due, with their unanswerable questions."""
+        from src.thesis.format import format_review_prompt
+
+        due = self._store.theses_due_for_review(datetime.now(timezone.utc))
+        if not due:
+            await update.effective_message.reply_text("Nothing due for review.")
+            return
+        await self._send_to_owner(format_review_prompt(due))
+
+    async def _reviewed(self, update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+        """/reviewed <SYMBOL> [note] — timestamp a review you actually did."""
+        args = ctx.args or []
+        if not args:
+            await update.effective_message.reply_text("Usage: `/reviewed <SYMBOL> [note]`",
+                                                      parse_mode=ParseMode.MARKDOWN)
+            return
+        symbol = args[0].upper()
+        for market in (Market.US, Market.BIST):
+            thesis = self._store.get_thesis(symbol, market)
+            if thesis is not None and thesis.id is not None:
+                self._store.mark_reviewed(
+                    thesis.id, datetime.now(timezone.utc), " ".join(args[1:])
+                )
+                await update.effective_message.reply_text(
+                    f"{symbol} reviewed. Next due "
+                    f"{thesis.review_due_on():%d %b %Y}."
+                )
+                return
+        await update.effective_message.reply_text(f"No open thesis for {symbol}.")
+
+    async def _close(self, update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+        """/close <SYMBOL> <reason> — record a sale, and whether anything broke."""
+        args = ctx.args or []
+        if len(args) < 2:
+            await update.effective_message.reply_text(
+                "Usage: `/close <SYMBOL> <reason>` — the reason is the point.",
+                parse_mode=ParseMode.MARKDOWN,
+            )
+            return
+        symbol, reason = args[0].upper(), " ".join(args[1:])
+        for market in (Market.US, Market.BIST):
+            thesis = self._store.get_thesis(symbol, market)
+            if thesis is None or thesis.id is None:
+                continue
+            checks = await asyncio.to_thread(self._monitor.check, thesis)
+            note = sale_without_cause(len(fired(checks)), len(unevaluated(checks)))
+            self._store.close_thesis(
+                thesis.id, datetime.now(timezone.utc), reason,
+                explained=note is None,
+            )
+            reply = f"Closed {symbol}: {reason}"
+            if note:
+                reply += "\n\n" + note
+            await self._send_to_owner(reply)
+            return
+        await update.effective_message.reply_text(f"No open thesis for {symbol}.")
+
+    # --------------------- weekly summary & watch ----------------------
 
     def build_digest(self) -> str:
-        """Assemble the full morning digest: valuation + ranked signals.
+        """The weekly summary. Blocking — call via asyncio.to_thread.
 
-        Blocking (prices, scan, narration, logging) — call via asyncio.to_thread.
-        Every recommendation is persisted to the audit trail here.
+        Contains no buy or sell ideas. That is not an omission: producing them is
+        the behaviour SPEC section 0 removed after two generations of evidence
+        that it does not work.
         """
         holdings = self._store.list_holdings()
         report = self._valuation.value(holdings)
-        recos = self._engine.scan(holdings)
-        narration_error = None
-        if self._narrator is not None:
-            recos, narration_error = self._narrator.narrate(recos)
-        self._log_actionable(recos)
+        theses = self._store.list_theses()
 
-        held_keys = {(h.symbol.upper(), h.market) for h in holdings}
-        now = datetime.now(ZoneInfo(self._settings.digest_timezone))
-        header = (
-            f"☀️ *Daily digest — {now:%a %d %b %Y, %H:%M} "
-            f"{self._settings.digest_timezone}*"
-        )
-        valuation = format_report(report)
-        signals = format_recommendations(
-            recos, header="Today's signals", held_keys=held_keys
-        )
-        return (
-            f"{header}\n\n{valuation}\n\n{signals}"
-            + _narration_warning(narration_error)
+        alerts: dict[str, list] = {}
+        unknown = 0
+        for thesis in theses:
+            checks = self._monitor.check(thesis)
+            hit = fired(checks)
+            if hit:
+                alerts[thesis.symbol] = hit
+            unknown += len(unevaluated(checks))
+
+        now = datetime.now(timezone.utc)
+        return format_weekly(
+            valuation=format_report(report),
+            theses=theses,
+            due=self._store.theses_due_for_review(now),
+            pace=trade_pace(self._store, days=90, now=now),
+            breaches=concentration_breaches(report, self._store),
+            alerts=alerts,
+            unknown=unknown,
         )
 
-    async def _daily_digest(self) -> None:
-        """Scheduled 08:30 callback — build the digest and push it to the owner."""
-        log.info("Building scheduled daily digest…")
+    def check_falsifiers(self) -> list[str]:
+        """Every open thesis, checked. Returns one message per thesis that fired.
+
+        An empty list means nothing to say, and nothing gets sent. Silence is the
+        correct output almost every day, and a monitor that speaks anyway trains
+        the owner to stop reading it.
+        """
+        messages = []
+        for thesis in self._store.list_theses():
+            checks = self._monitor.check(thesis)
+            hit = fired(checks)
+            if not hit:
+                continue
+            if thesis.id is not None:
+                for check in hit:
+                    self._store.record_thesis_event(
+                        thesis.id, "FIRED",
+                        f"{check.falsifier.kind.value}: {check.detail}",
+                    )
+            messages.append(format_alert(thesis, hit))
+        return messages
+
+    async def _weekly_summary(self) -> None:
+        """Scheduled Sunday callback."""
         try:
             text = await asyncio.to_thread(self.build_digest)
-        except Exception:  # noqa: BLE001 - never let a bad day kill the scheduler
-            log.exception("Daily digest build failed")
-            await self._app.bot.send_message(
-                chat_id=self._settings.telegram_owner_id,
-                text="⚠️ Daily digest failed to build today; will retry tomorrow.",
-            )
+            await self._send_to_owner(text)
+        except Exception:
+            log.exception("Weekly summary failed")
+
+    async def _falsifier_watch(self) -> None:
+        """Scheduled daily callback that usually sends nothing at all."""
+        try:
+            messages = await asyncio.to_thread(self.check_falsifiers)
+        except Exception:
+            log.exception("Falsifier check failed")
             return
-        for chunk in _split_for_telegram(text):
-            await self._send_to_owner(chunk)
+        for text in messages:
+            await self._send_to_owner(text)
 
     async def _digest_now(self, update: Update, _: ContextTypes.DEFAULT_TYPE) -> None:
-        """/digest — build and send the morning digest on demand (for testing)."""
-        msg = await update.effective_message.reply_text("☀️ Building today's digest…")
+        """/digest — build the weekly summary on demand."""
         text = await asyncio.to_thread(self.build_digest)
-        await self._send_chunked(update, msg, text)
+        await self._send_to_owner(text)
 
     async def _log(self, update: Update, _: ContextTypes.DEFAULT_TYPE) -> None:
         recos = self._store.recent_recommendations(limit=10)
@@ -425,6 +605,51 @@ def _split_for_telegram(text: str, limit: int = _TG_LIMIT) -> list[str]:
         current += line + "\n"
     flush()
     return chunks
+
+
+def _parse_falsifier(spec: str) -> Falsifier | None:
+    """Read one falsifier from the compact syntax used by /thesis add.
+
+    Kept terse because it is typed on a phone, and typing is where good
+    intentions die. `trend:200/4`, `drawdown:0.5`, `growth:0.20`, `margin:0.10`,
+    or `ask: <question>` for something only a human can answer.
+    """
+    spec = spec.strip()
+    key, _, rest = spec.partition(":")
+    key, rest = key.strip().lower(), rest.strip()
+    try:
+        if key == "trend":
+            days, _, weeks = rest.partition("/")
+            return Falsifier(
+                FalsifierKind.TREND_BREAK,
+                f"closes below its {days or 200}-day average for "
+                f"{weeks or 4} straight weeks",
+                lookback=int(days or 200), persistence=int(weeks or 4),
+            )
+        if key == "drawdown":
+            pct = float(rest)
+            return Falsifier(
+                FalsifierKind.DRAWDOWN,
+                f"falls {pct * 100:.0f}% below its high since I bought",
+                threshold=pct,
+            )
+        if key == "growth":
+            pct = float(rest)
+            return Falsifier(
+                FalsifierKind.REVENUE_GROWTH,
+                f"revenue growth drops under {pct * 100:.0f}%", threshold=pct,
+            )
+        if key == "margin":
+            pct = float(rest)
+            return Falsifier(
+                FalsifierKind.PROFIT_MARGIN,
+                f"profit margin drops under {pct * 100:.0f}%", threshold=pct,
+            )
+        if key == "ask" and rest:
+            return Falsifier(FalsifierKind.MANUAL, rest)
+    except ValueError:
+        return None
+    return None
 
 
 def _parse_market(raw: str) -> Market | None:

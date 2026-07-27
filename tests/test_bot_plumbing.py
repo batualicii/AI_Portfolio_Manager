@@ -134,3 +134,106 @@ def test_an_over_length_line_mixed_with_normal_ones_stays_within_the_cap():
     assert all(len(c) <= _TG_LIMIT for c in chunks)
     assert chunks[0].startswith("short header")
     assert chunks[-1].endswith("short footer")
+
+
+# --------------------------- thesis-era bot surface --------------------------
+
+def test_the_falsifier_syntax_reads_each_supported_form():
+    from src.bot.telegram_bot import _parse_falsifier
+    from src.models import FalsifierKind
+
+    trend = _parse_falsifier("trend:200/4")
+    assert trend.kind is FalsifierKind.TREND_BREAK
+    assert (trend.lookback, trend.persistence) == (200, 4)
+
+    dd = _parse_falsifier("drawdown:0.5")
+    assert dd.kind is FalsifierKind.DRAWDOWN and dd.threshold == 0.5
+
+    growth = _parse_falsifier("growth:0.20")
+    assert growth.kind is FalsifierKind.REVENUE_GROWTH
+    assert "under 20%" in growth.text
+
+    ask = _parse_falsifier("ask: a rival ships at scale")
+    assert ask.kind is FalsifierKind.MANUAL and not ask.checkable
+
+
+def test_an_unreadable_falsifier_is_rejected_rather_than_guessed():
+    from src.bot.telegram_bot import _parse_falsifier
+
+    assert _parse_falsifier("trend:abc") is None
+    assert _parse_falsifier("nonsense") is None
+    assert _parse_falsifier("ask:") is None      # a question with no question
+
+
+def test_the_bot_no_longer_offers_a_scan_command():
+    """Ranked buy/sell output is what this design removed, not a missing feature."""
+    import inspect
+
+    from src.bot import telegram_bot
+
+    source = inspect.getsource(telegram_bot.PortfolioBot._register)
+    assert '"scan"' not in source
+    assert '"thesis"' in source and '"close"' in source
+
+
+@pytest.fixture()
+def bot(tmp_path):
+    """A real PortfolioBot over fake data — no network, no token validation."""
+    from src.bot.telegram_bot import PortfolioBot
+    from src.config import Settings
+    from src.signals.engine import SignalEngine
+    from src.storage.db import Store
+    from tests.conftest import FakeNews, FakeProvider
+
+    settings = Settings(
+        telegram_bot_token="123456:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        telegram_owner_id=1, anthropic_api_key=None, anthropic_model="x",
+        finnhub_api_key=None, digest_timezone="Europe/Istanbul",
+        digest_time="08:30", db_path=tmp_path / "d.db",
+    )
+    store = Store(tmp_path / "d.db")
+    provider = FakeProvider({})
+    yield PortfolioBot(settings, store, provider, SignalEngine(provider, FakeNews())), store
+    store.close()
+
+
+def test_the_weekly_summary_contains_no_buy_or_sell_calls(bot):
+    """The plan's acceptance criterion for the pivot."""
+    portfolio_bot, _ = bot
+    text = portfolio_bot.build_digest()
+    for word in ("BUY", "SELL", "TRIM"):
+        assert word not in text
+    assert "Weekly review" in text
+
+
+def test_the_daily_check_says_nothing_when_nothing_fired(bot):
+    """Silence is the correct output almost every day."""
+    portfolio_bot, _ = bot
+    assert portfolio_bot.check_falsifiers() == []
+
+
+def test_a_fired_falsifier_produces_one_alert_and_is_logged(bot):
+    from datetime import datetime, timezone
+
+    from src.models import Falsifier, FalsifierKind, Market, Thesis
+
+    portfolio_bot, store = bot
+    tid = store.open_thesis(Thesis(
+        symbol="X", market=Market.US, opened_at=datetime(2024, 1, 1, tzinfo=timezone.utc),
+        entry_price=100.0, conviction=3, summary="why I own it",
+        falsifiers=(Falsifier(FalsifierKind.DRAWDOWN, "halved", threshold=0.5),),
+    ))
+    # FakeProvider has no history for X, so the check cannot be evaluated and
+    # must not fire — an unanswerable question is not a breach.
+    assert portfolio_bot.check_falsifiers() == []
+
+    # Now give it a price series that halves from its post-entry high.
+    from tests.conftest import _bars
+    portfolio_bot._monitor._provider.set_history("X", Market.US,
+                                                 _bars([100.0, 200.0, 80.0]))
+    messages = portfolio_bot.check_falsifiers()
+
+    assert len(messages) == 1
+    assert "conditions you wrote at purchase" in messages[0] or \
+           "condition you wrote at purchase" in messages[0]
+    assert [e["kind"] for e in store.thesis_events(tid)][0] == "FIRED"
