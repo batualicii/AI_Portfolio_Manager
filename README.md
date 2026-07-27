@@ -3,8 +3,10 @@
 A personal **Telegram bot** for a **US + Turkish (BIST)** portfolio. It does **not** tell
 you what to buy. It records why you own each position, watches for the specific conditions
 that would prove that reasoning wrong, and holds you to the position limits and trading
-pace you set yourself. You research and execute in Midas. See [SPEC.md](SPEC.md) for the
-design and the honesty/risk notes.
+pace you set yourself. You research and execute in Midas.
+
+**→ [USAGE.md](USAGE.md) — how to install and run it.** [SPEC.md](SPEC.md) has the design
+and the honesty/risk notes; the rest of this file is the evidence behind both.
 
 > ⚠️ **Not financial advice and not a guarantee.** Nothing here claims to beat an index —
 > SPEC §6c shows that at this portfolio size such a claim is not even measurable. Start
