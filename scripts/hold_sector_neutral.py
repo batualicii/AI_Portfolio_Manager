@@ -47,6 +47,8 @@ import logging
 import pathlib
 import statistics
 
+import pandas as pd
+
 from src.backtest.hold_engine import (
     UNKNOWN_POLICIES,
     HoldBacktester,
@@ -130,7 +132,12 @@ def main() -> int:
     rows: dict[str, list[float]] = {p: [] for p in policies}
     raw_edges: list[float] = []
     years_run: list[int] = []
+    partial: set[int] = set()
+    risk: list[tuple[int, float, float, float, float]] = []
     book: collections.Counter[str] = collections.Counter()
+    # The first policy drives the risk table — reporting drawdown three times
+    # would bury the comparison that matters, which is capped vs passive.
+    primary = policies[0]
 
     header = f"  {'Year':<6} {'uncapped':>9} " + " ".join(
         f"{p:>9}" for p in policies) + f" │ {'PIT EW':>9}   top sector in book"
@@ -166,6 +173,16 @@ def main() -> int:
         for policy, result in capped.items():
             rows[policy].append(result.metrics.total_return_pct - ew)
 
+        # A year whose data stops in, say, July is not a year. Averaging it in
+        # beside twelve-month figures overstates whatever it contributes.
+        last = unc.equity.index[-1]
+        if (pd.Timestamp(f"{year}-12-31").tz_localize(last.tz) - last).days > 45:
+            partial.add(year)
+
+        cm, em = capped[primary].metrics, unc.universe_metrics
+        risk.append((year, cm.max_drawdown_pct, em.max_drawdown_pct,
+                     cm.sharpe, em.sharpe))
+
         counts: collections.Counter[str] = collections.Counter()
         for _, names in unc.holdings_log:
             for sym in names:
@@ -177,7 +194,8 @@ def main() -> int:
 
         cells = " ".join(f"{capped[p].metrics.total_return_pct:>8.1f}%"
                          for p in policies)
-        print(f"  {year:<6} {u:>8.1f}% {cells} │ {ew:>8.1f}%   {share}")
+        mark = "†" if year in partial else " "
+        print(f"  {year:<5}{mark} {u:>8.1f}% {cells} │ {ew:>8.1f}%   {share}")
 
     if not years_run:
         return 1
@@ -196,6 +214,60 @@ def main() -> int:
 
     raw_mean, _ = summarise("uncapped", raw_edges)
     cap_means = {p: summarise(f"capped ({p})", rows[p]) for p in policies}
+
+    if partial:
+        print(f"\n  † {', '.join(str(y) for y in sorted(partial))} is a partial year "
+              f"— the data ends before December, so its figure covers"
+              f"\n    fewer months than every other row and is not comparable to them.")
+
+    # An edge that lives in the last few years is a regime, not a rule. Splitting
+    # the record makes that visible instead of leaving it inside an average.
+    if n >= 6:
+        cut = years_run[-3]
+        early = [e for y, e in zip(years_run, rows[primary]) if y < cut]
+        late = [e for y, e in zip(years_run, rows[primary]) if y >= cut]
+        if early and late:
+            print(f"\n  where the capped ({primary}) edge actually lives:")
+            print(f"    {years_run[0]}-{cut - 1} ({len(early)} yr)   "
+                  f"mean {sum(early) / len(early):>+6.1f} pp   "
+                  f"total {sum(early):>+7.1f} pp")
+            print(f"    {cut}-{years_run[-1]} ({len(late)} yr)   "
+                  f"mean {sum(late) / len(late):>+6.1f} pp   "
+                  f"total {sum(late):>+7.1f} pp")
+            total = sum(early) + sum(late)
+            if total > 0:
+                print(f"    the last {len(late)} years carry "
+                      f"{sum(late) / total * 100:.0f}% of the whole record")
+            if sum(early) <= 0:
+                print("    The early block is flat or negative: outside the recent "
+                      "\n    stretch this ranking added nothing. One regime is not a "
+                      "\n    strategy, however good the recent numbers look.")
+
+    # Return is only half the objective. A rule that matches the passive
+    # alternative while shaking the holder less is a success on the stated goal
+    # and would be invisible in a table of returns alone.
+    if risk:
+        print(f"\n  risk, capped ({primary}) vs point-in-time equal-weight:")
+        print(f"    {'Year':<7} {'maxDD':>8} {'EW maxDD':>9} │ "
+              f"{'Sharpe':>7} {'EW Sharpe':>10}")
+        shallower = better_sharpe = 0
+        for year, dd, edd, sh, esh in risk:
+            flag = "  shallower" if dd > edd else ""
+            shallower += dd > edd            # drawdowns are negative
+            better_sharpe += sh > esh
+            print(f"    {year:<7} {dd:>7.1f}% {edd:>8.1f}% │ "
+                  f"{sh:>7.2f} {esh:>10.2f}{flag}")
+        m = len(risk)
+        print(f"    mean maxDD {sum(r[1] for r in risk) / m:>6.1f}% vs "
+              f"{sum(r[2] for r in risk) / m:>6.1f}%   ·   "
+              f"mean Sharpe {sum(r[3] for r in risk) / m:>5.2f} vs "
+              f"{sum(r[4] for r in risk) / m:>5.2f}")
+        print(f"    shallower drawdown {shallower}/{m} years   ·   "
+              f"better Sharpe {better_sharpe}/{m}")
+        if shallower >= m * 0.6:
+            print("    This is the result worth taking seriously even if the return "
+                  "\n    edge is noise: matching a passive alternative while falling "
+                  "\n    less is a real outcome, and it is what was actually asked for.")
 
     slots = sum(book.values())
     if slots:
