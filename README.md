@@ -146,7 +146,8 @@ The bot no longer tells you what to buy. It remembers why you bought, and tells
 you when something you wrote down comes true.
 
 ```bash
-python -m scripts.build_smallcap_universe   # the pond big funds cannot fish in
+python -m scripts.build_smallcap_universe   # US pond: S&P 600, 601 names
+python -m scripts.build_bist_universe       # BIST pond: BIST 100, 101 names
 python -m scripts.screen_candidates US      # a reading list, not a buy list
 python -m scripts.screen_candidates BIST
 python main.py
