@@ -83,26 +83,59 @@ def _distribution(name: str, outcomes: list[PositionOutcome]) -> None:
 
 
 def _cohort_windows(n: int, years: int, period_years: int) -> list[tuple[str, str]]:
-    """Same-length windows, each starting a quarter later than the last.
+    """Same-length windows spread across every year of history available.
 
     A single window is a single draw. `forever` in particular buys eight names on
     one date and holds them, so its whole result rests on which eight the ranking
     happened to like that quarter — shift the start and the names change. Running
-    the same rule from staggered starts turns n=1 into n=`cohorts` and separates
-    a durable property from one lucky cohort.
+    the same rule from staggered starts separates a durable property from one
+    lucky cohort.
 
-    Windows are equal length so the returns compare directly; only the start moves.
+    Earlier this stepped a fixed quarter at a time, which packed every cohort into
+    the first year or two of available history and left most of the room unused.
+    The starts are now spread over the whole gap between the data's beginning and
+    the latest date a full window still fits, so the cohorts differ as much as the
+    data allows.
+
+    They are still not independent: `years`-long windows drawn from a
+    `period_years` span must overlap heavily. `_overlap_note` reports how much,
+    because a reader who takes "beat the index 7/8" as seven independent successes
+    would be badly misled.
     """
     today = dt.date.today()
     earliest = today - dt.timedelta(days=int(period_years * 365.25))
+    room_days = int((period_years - years) * 365.25)
+    if room_days <= 0 or n < 1:
+        return []
+    step = room_days / max(1, n - 1) if n > 1 else 0
     windows = []
     for i in range(n):
-        start = earliest + dt.timedelta(days=int(i * 91.3))
+        start = earliest + dt.timedelta(days=int(i * step))
         end = start + dt.timedelta(days=int(years * 365.25))
         if end > today:
             break
         windows.append((start.isoformat(), end.isoformat()))
     return windows
+
+
+def _overlap_note(windows: list[tuple[str, str]], years: int) -> str:
+    """State plainly how little independence staggered windows actually buy."""
+    if len(windows) < 2:
+        return ""
+    span = (dt.date.fromisoformat(windows[-1][1])
+            - dt.date.fromisoformat(windows[0][0])).days / 365.25
+    # Roughly how many non-overlapping windows of this length fit in the span.
+    effective = max(1.0, span / years)
+    return (
+        f"  ⚠️  These {len(windows)} cohorts are NOT independent. {years}-year windows\n"
+        f"      drawn from a {span:.1f}-year span overlap heavily — that is about "
+        f"**{effective:.1f}**\n"
+        f"      non-overlapping windows' worth of information, not {len(windows)}. "
+        f"Read a score\n"
+        f"      of 'beat the index 7/8' as one period counted seven times, not seven\n"
+        f"      independent successes. Widening this needs history the point-in-time\n"
+        f"      membership file does not yet cover."
+    )
 
 
 def main() -> int:
@@ -179,6 +212,9 @@ def main() -> int:
         return 1
 
     any_run = next(iter(results.values()))
+    print(f"\n  loaded {any_run.universe_loaded}/{any_run.universe_requested} symbols "
+          f"— a rate-limited fetch silently shrinks the universe, so two runs with "
+          f"\n  different counts here are not comparable.")
     print(f"\n  {'rule':<10} {'return':>9} {'CAGR':>7} {'maxDD':>8} {'Sharpe':>7} "
           f"{'turnover':>9}")
     print("  " + "-" * 56)
@@ -232,8 +268,25 @@ def _run_cohorts(args, provider, cfg, capped, members_at, base, legs, panel_cach
               f"{args.cohort_years}y inside a {args.period} window.")
         return
 
+    earliest_pit = min(int(y) for y in json.loads(PIT.read_text())["by_year"])
+    usable = [w for w in windows if int(w[0][:4]) >= earliest_pit]
+    if len(usable) < len(windows):
+        # members_at() returns an empty set outside the reconstructed range, which
+        # would produce a flat, empty run rather than an error — a silent wrong
+        # answer is worse than a missing one.
+        print(f"\n  Dropping {len(windows) - len(usable)} cohort(s) starting before "
+              f"{earliest_pit}: point-in-time membership does not\n  cover them, and "
+              f"running anyway would report an empty portfolio as a result.")
+        windows = usable
+    if len(windows) < 2:
+        print("  Not enough cohorts left to compare.")
+        return
+
     print(f"\n{'=' * 88}\nSame rules, {len(windows)} staggered start dates "
           f"({args.cohort_years}-year windows)\n{'=' * 88}")
+    note = _overlap_note(windows, args.cohort_years)
+    if note:
+        print(note + "\n")
     print("  One window is one draw. `forever` buys eight names on a single date, so its"
           "\n  whole result rests on which eight the ranking liked that quarter. If a "
           "rule\n  only works from one starting point, it is a fact about that quarter, "

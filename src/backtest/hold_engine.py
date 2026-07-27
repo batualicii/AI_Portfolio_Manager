@@ -78,6 +78,12 @@ class HoldResult:
     holdings_log: list[tuple[pd.Timestamp, list[str]]] = field(default_factory=list)
     outcomes: list[PositionOutcome] = field(default_factory=list)
     turnover_pct: float = 0.0
+    # How much of the configured universe actually made it into the panel. A
+    # provider that rate-limits will silently return nothing for some symbols,
+    # which changes the universe between runs and therefore the result. Two runs
+    # that disagree should be visibly different, not mysteriously different.
+    universe_requested: int = 0
+    universe_loaded: int = 0
 
 
 def pit_equal_weight_curve(
@@ -379,6 +385,7 @@ class HoldBacktester:
             return self._panel_cache[key]
 
         panel: dict[str, pd.DataFrame] = {}
+        dropped: list[str] = []
         for sym in self._cfg.universe(self._market):
             bars = self._provider.get_history(sym, self._market, period=self._hold.period)
             if len(bars) >= self._hold.warmup_bars:
@@ -386,7 +393,17 @@ class HoldBacktester:
                 df.index = df.index.normalize()
                 panel[sym] = df
             else:
-                log.info("Hold backtest: dropping %s (%d bars)", sym, len(bars))
+                dropped.append(sym)
+        if dropped:
+            # WARNING, not INFO: the scripts run at WARNING, and a silently
+            # shrinking universe is exactly the kind of thing that makes two
+            # runs disagree for no visible reason.
+            log.warning(
+                "Hold backtest: %d of %d symbols had too little history and were "
+                "dropped (first few: %s)",
+                len(dropped), len(self._cfg.universe(self._market)),
+                ", ".join(dropped[:8]),
+            )
         index_sym = self._cfg.index_symbol[self._market]
         idx = ind.bars_to_frame(
             self._provider.get_history(index_sym, Market.US, period=self._hold.period)
@@ -581,5 +598,7 @@ class HoldBacktester:
             universe_metrics=compute_metrics(universe, []),
             holdings_log=holdings_log,
             outcomes=outcomes,
+            universe_requested=len(self._cfg.universe(self._market)),
+            universe_loaded=len(panel),
             turnover_pct=round(traded_notional / hold.start_equity * 100.0, 1),
         )
