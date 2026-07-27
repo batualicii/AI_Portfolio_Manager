@@ -133,7 +133,37 @@ python -m scripts.build_pit_universe --check   # membership + price coverage
 python -m scripts.build_sector_map             # GICS sector per symbol
 python -m scripts.hold_sector_neutral          # does the edge survive the cap?
 python -m scripts.hold_early_trend             # does entering earlier help?
+python -m scripts.hold_exit_rules --cohorts 8  # does letting winners run help?
 ```
+
+## Using it now
+
+The bot no longer tells you what to buy. It remembers why you bought, and tells
+you when something you wrote down comes true.
+
+```bash
+python -m scripts.build_smallcap_universe   # the pond big funds cannot fish in
+python -m scripts.screen_candidates US      # a reading list, not a buy list
+python -m scripts.screen_candidates BIST
+python main.py
+```
+
+In Telegram:
+
+| | |
+|---|---|
+| `/thesis add US NVDA 100 4 \| why I own it \| trend:200/4 \| growth:0.20` | write it down before you buy |
+| `/thesis` · `/thesis NVDA` | list them, or see where each condition stands |
+| `/check` | run every condition now |
+| `/review` · `/reviewed NVDA` | reviews that cannot silently never happen |
+| `/close NVDA <reason>` | records whether anything actually broke |
+
+A weekly summary arrives on Sundays. Falsifiers are checked **daily and
+silently** — you only hear about it if one fires, because a monitor that speaks
+every day teaches you to stop reading it.
+
+There is no `/scan`. Producing ranked buy/sell calls is what this project
+removed, not a feature waiting to be restored — SPEC §0 has the evidence.
 
 Nothing here clears the SPEC §6b gate. Ten years, one selector, one market.
 
