@@ -82,6 +82,29 @@ def _distribution(name: str, outcomes: list[PositionOutcome]) -> None:
           if total_pnl > 0 else f"    {'':<10} no profit to attribute")
 
 
+def _cohort_windows(n: int, years: int, period_years: int) -> list[tuple[str, str]]:
+    """Same-length windows, each starting a quarter later than the last.
+
+    A single window is a single draw. `forever` in particular buys eight names on
+    one date and holds them, so its whole result rests on which eight the ranking
+    happened to like that quarter — shift the start and the names change. Running
+    the same rule from staggered starts turns n=1 into n=`cohorts` and separates
+    a durable property from one lucky cohort.
+
+    Windows are equal length so the returns compare directly; only the start moves.
+    """
+    today = dt.date.today()
+    earliest = today - dt.timedelta(days=int(period_years * 365.25))
+    windows = []
+    for i in range(n):
+        start = earliest + dt.timedelta(days=int(i * 91.3))
+        end = start + dt.timedelta(days=int(years * 365.25))
+        if end > today:
+            break
+        windows.append((start.isoformat(), end.isoformat()))
+    return windows
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--top", type=int, default=8)
@@ -89,6 +112,11 @@ def main() -> int:
     parser.add_argument("--period", default="10y")
     parser.add_argument("--ma-window", type=int, default=200)
     parser.add_argument("--weeks", type=int, default=4)
+    parser.add_argument("--cohorts", type=int, default=0,
+                        help="also run N staggered start dates, to test whether a "
+                             "single window's result was luck (slow)")
+    parser.add_argument("--cohort-years", type=int, default=6,
+                        help="length of each cohort window")
     args = parser.parse_args()
 
     for path, cmd in ((PIT, "build_pit_universe"), (SECTORS, "build_sector_map")):
@@ -113,6 +141,7 @@ def main() -> int:
         return by_year.get(year, set())
 
     provider = YahooProvider()
+    panel_cache: dict = {}
     base = HoldConfig(top_n=args.top, period=args.period)
     cfg = dataclasses.replace(SignalConfig(), us_universe=ever_syms)
     capped = sector_capped_selector(sectors, max_per_sector=args.max_per_sector)
@@ -141,7 +170,7 @@ def main() -> int:
             results[name] = HoldBacktester(
                 Market.US, provider, cfg=cfg, selector=capped, members_at=members_at,
                 hold=dataclasses.replace(base, rebalance_weights=rebalance),
-                exit_rule=rule,
+                exit_rule=rule, panel_cache=panel_cache,
             ).run()
         except Exception as exc:  # noqa: BLE001
             print(f"  {name}: skipped — {str(exc)[:60]}")
@@ -185,10 +214,92 @@ def main() -> int:
                   f"{rot_best:.1f}x).\n  In this universe the names that fell out of the "
                   f"ranking mostly kept falling,\n  and rotation was doing real work.")
 
+    if args.cohorts:
+        _run_cohorts(args, provider, cfg, capped, members_at, base, legs, panel_cache)
+
     print("\n  Caveats that still apply: the universe is point-in-time but only ~48% of")
     print("  dropped names can be priced, costs are modelled at 0.1% with no per-trade")
     print("  minimum, and one ten-year window of one market is a single sample.")
     return 0
+
+
+def _run_cohorts(args, provider, cfg, capped, members_at, base, legs, panel_cache):
+    """Was the single-window result a property of the rule, or of the start date?"""
+    period_years = int("".join(c for c in args.period if c.isdigit()) or 10)
+    windows = _cohort_windows(args.cohorts, args.cohort_years, period_years)
+    if len(windows) < 2:
+        print(f"\n  Not enough history for {args.cohorts} cohorts of "
+              f"{args.cohort_years}y inside a {args.period} window.")
+        return
+
+    print(f"\n{'=' * 88}\nSame rules, {len(windows)} staggered start dates "
+          f"({args.cohort_years}-year windows)\n{'=' * 88}")
+    print("  One window is one draw. `forever` buys eight names on a single date, so its"
+          "\n  whole result rests on which eight the ranking liked that quarter. If a "
+          "rule\n  only works from one starting point, it is a fact about that quarter, "
+          "not a rule.\n")
+
+    header = f"  {'start':<12} " + " ".join(f"{k:>19}" for k in legs) + f" {'index':>8}"
+    print(header)
+    print(f"  {'':<12} " + " ".join(f"{'CAGR   best':>19}" for _ in legs))
+    print("  " + "-" * (len(header) - 2))
+
+    cagrs: dict[str, list[float]] = {k: [] for k in legs}
+    bests: dict[str, list[float]] = {k: [] for k in legs}
+    beat_index = {k: 0 for k in legs}
+    ran = 0
+
+    for start, end in windows:
+        window = dataclasses.replace(base, trade_start=start, trade_end=end)
+        cells, idx_cagr, ok = [], float("nan"), True
+        for name, (rule, rebalance) in legs.items():
+            try:
+                r = HoldBacktester(
+                    Market.US, provider, cfg=cfg, selector=capped,
+                    members_at=members_at, exit_rule=rule, panel_cache=panel_cache,
+                    hold=dataclasses.replace(window, rebalance_weights=rebalance),
+                ).run()
+            except Exception as exc:  # noqa: BLE001
+                print(f"  {start:<12} skipped: {str(exc)[:50]}")
+                ok = False
+                break
+            best = max((o.multiple for o in r.outcomes), default=0.0)
+            cagrs[name].append(r.metrics.cagr_pct)
+            bests[name].append(best)
+            idx_cagr = r.benchmark_metrics.cagr_pct
+            beat_index[name] += r.metrics.cagr_pct > idx_cagr
+            cells.append(f"{r.metrics.cagr_pct:>11.1f}% {best:>6.1f}x")
+        if ok:
+            ran += 1
+            print(f"  {start:<12} " + " ".join(cells) + f" {idx_cagr:>7.1f}%")
+
+    if ran < 2:
+        return
+    print("  " + "-" * (len(header) - 2))
+    print(f"\n  across {ran} start dates:")
+    for name in legs:
+        c, b = cagrs[name], bests[name]
+        print(f"    {name:<10} CAGR median {statistics.median(c):>6.1f}%   "
+              f"range {min(c):>6.1f}% .. {max(c):>6.1f}%   "
+              f"best position {min(b):>5.1f}x .. {max(b):>5.1f}x   "
+              f"beat index {beat_index[name]}/{ran}")
+
+    spread = {k: max(v) - min(v) for k, v in cagrs.items()}
+    widest = max(spread, key=spread.get)
+    print()
+    if spread[widest] > 15:
+        print(f"  `{widest}` swings {spread[widest]:.0f} points of CAGR depending only on "
+              f"which quarter\n  it started. That is a fact about the start date, not "
+              f"about the rule, and any\n  single-window figure for it should be read as "
+              f"one draw from that range.")
+    else:
+        print("  No rule swings more than 15 points of CAGR across start dates, so the "
+              "\n  single-window ordering is not merely an artefact of when it began.")
+
+    steady = min(spread, key=spread.get)
+    print(f"  Most stable across start dates: `{steady}` "
+          f"({spread[steady]:.0f} points of CAGR spread). Stability is not the same as "
+          f"\n  profitability, but an unstable rule cannot be relied on either way.")
 
 
 if __name__ == "__main__":

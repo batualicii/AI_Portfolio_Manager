@@ -583,3 +583,30 @@ def test_not_rebalancing_leaves_a_winner_alone():
     # the faster riser compound must end up ahead of trimming it every quarter.
     assert left_alone.metrics.total_return_pct > trimmed.metrics.total_return_pct
     assert left_alone.turnover_pct < trimmed.turnover_pct
+
+
+def test_a_shared_panel_cache_avoids_refetching_the_same_universe():
+    """Cohort sweeps run the same universe many times; it should load once."""
+    bars = {"A": momentum_uptrend(400), "B": momentum_downtrend(400)}
+    provider = _provider(bars, momentum_uptrend(400))
+    cache: dict = {}
+
+    HoldBacktester(Market.US, provider, cfg=_cfg("A", "B"), hold=HOLD,
+                   panel_cache=cache).run()
+    after_first = len(provider.history_calls)
+    HoldBacktester(Market.US, provider, cfg=_cfg("A", "B"), hold=HOLD,
+                   panel_cache=cache).run()
+
+    assert cache, "the panel should have been stored"
+    assert len(provider.history_calls) == after_first  # second run fetched nothing
+
+
+def test_without_a_cache_each_run_is_independent():
+    bars = {"A": momentum_uptrend(400), "B": momentum_downtrend(400)}
+    provider = _provider(bars, momentum_uptrend(400))
+
+    HoldBacktester(Market.US, provider, cfg=_cfg("A", "B"), hold=HOLD).run()
+    after_first = len(provider.history_calls)
+    HoldBacktester(Market.US, provider, cfg=_cfg("A", "B"), hold=HOLD).run()
+
+    assert len(provider.history_calls) > after_first

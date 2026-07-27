@@ -344,6 +344,7 @@ class HoldBacktester:
         members_at=None,
         scorer=None,
         exit_rule=None,
+        panel_cache=None,
     ) -> None:
         self._market = market
         self._provider = provider
@@ -365,8 +366,18 @@ class HoldBacktester:
         # Asked only about names that dropped out of the ranking. The default
         # sells them, which is rotation; alternatives let a position ride.
         self._exit_rule = exit_rule or rank_drop_exit
+        # Optional shared dict so a caller running the same universe many times
+        # (cohort sweeps, rule comparisons) pays the panel-building cost once.
+        # Passed in rather than global, so nothing is cached behind a caller's
+        # back and tests stay independent of each other.
+        self._panel_cache = panel_cache
 
     def _load_panel(self) -> tuple[dict[str, pd.DataFrame], pd.DataFrame]:
+        key = (self._market, self._cfg.universe(self._market), self._hold.period,
+               self._hold.warmup_bars)
+        if self._panel_cache is not None and key in self._panel_cache:
+            return self._panel_cache[key]
+
         panel: dict[str, pd.DataFrame] = {}
         for sym in self._cfg.universe(self._market):
             bars = self._provider.get_history(sym, self._market, period=self._hold.period)
@@ -382,6 +393,8 @@ class HoldBacktester:
         )
         if not idx.empty:
             idx.index = idx.index.normalize()
+        if self._panel_cache is not None:
+            self._panel_cache[key] = (panel, idx)
         return panel, idx
 
     def run(self) -> HoldResult:
