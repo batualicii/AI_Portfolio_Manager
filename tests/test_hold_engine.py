@@ -492,3 +492,94 @@ def test_the_extension_cap_changes_which_names_a_real_run_holds():
 
     assert all(held == ["VERTICAL"] for _, held in plain.holdings_log)
     assert all(held == ["STEADY"] for _, held in early.holdings_log)
+
+
+# ------------------------------- exit rules ---------------------------------
+
+def test_never_exit_keeps_a_name_that_fell_out_of_the_ranking():
+    """The whole point: a position must be allowed to survive a drawdown."""
+    from src.backtest.hold_engine import never_exit
+
+    bars = {"FADER": momentum_uptrend(500, daily_pct=0.004),
+            "RISER": momentum_uptrend(500, daily_pct=0.008)}
+    provider = _provider(bars, momentum_uptrend(500))
+    cfg = _cfg("FADER", "RISER")
+    hold = dataclasses.replace(HOLD, top_n=1, rebalance_weights=False)
+
+    result = HoldBacktester(Market.US, provider, cfg=cfg, hold=hold,
+                            exit_rule=never_exit).run()
+
+    # Whatever was bought first is still there at every later rebalance.
+    first = set(result.holdings_log[0][1])
+    assert first
+    assert all(first <= set(held) for _, held in result.holdings_log)
+
+
+def test_the_default_exit_rule_still_rotates():
+    bars = {"FADER": momentum_uptrend(500, daily_pct=0.004),
+            "RISER": momentum_uptrend(500, daily_pct=0.008)}
+    provider = _provider(bars, momentum_uptrend(500))
+    result = HoldBacktester(Market.US, provider, cfg=_cfg("FADER", "RISER"),
+                            hold=dataclasses.replace(HOLD, top_n=1)).run()
+    assert all(len(held) == 1 for _, held in result.holdings_log)
+
+
+def test_trend_break_holds_through_a_drawdown_but_exits_a_dead_trend():
+    from src.backtest.hold_engine import ExitContext, trend_break_exit
+
+    rule = trend_break_exit(ma_window=200, weeks=4)
+    day = pd.Timestamp("2024-06-01")
+
+    def ctx(close: pd.Series) -> ExitContext:
+        return ExitContext(symbol="X", day=day, close=close,
+                           entry_day=day, entry_price=100.0,
+                           price=float(close.iloc[-1]))
+
+    # A dip that recovers: last 20 bars are not all below the average.
+    dip = pd.Series([100.0] * 230 + [80.0] * 5 + [120.0] * 15)
+    assert rule(ctx(dip)) is False
+
+    # A sustained break: every one of the last 20 bars sits below the average.
+    dead = pd.Series([100.0] * 230 + [60.0] * 20)
+    assert rule(ctx(dead)) is True
+
+
+def test_trend_break_holds_when_there_is_not_enough_history_to_judge():
+    from src.backtest.hold_engine import ExitContext, trend_break_exit
+
+    rule = trend_break_exit(ma_window=200, weeks=4)
+    short = pd.Series([100.0] * 50)
+    assert rule(ExitContext("X", pd.Timestamp("2024-01-01"), short,
+                            pd.Timestamp("2023-01-01"), 100.0, 100.0)) is False
+
+
+def test_outcomes_record_every_position_including_the_ones_still_open():
+    bars = {"A": momentum_uptrend(500, daily_pct=0.004),
+            "B": momentum_uptrend(500, daily_pct=0.008)}
+    provider = _provider(bars, momentum_uptrend(500))
+    result = HoldBacktester(Market.US, provider, cfg=_cfg("A", "B"), hold=HOLD).run()
+
+    assert result.outcomes
+    assert any(o.exit_day is None for o in result.outcomes)  # still held at the end
+    for o in result.outcomes:
+        assert o.entry_price > 0
+        assert o.multiple == pytest.approx(o.exit_price / o.entry_price)
+
+
+def test_not_rebalancing_leaves_a_winner_alone():
+    """Equal-weight rebalancing trims winners — that is what must not happen here."""
+    bars = {"A": momentum_uptrend(500, daily_pct=0.002),
+            "B": momentum_uptrend(500, daily_pct=0.010)}
+    provider = _provider(bars, momentum_uptrend(500))
+    cfg, hold = _cfg("A", "B"), dataclasses.replace(HOLD, top_n=2)
+
+    trimmed = HoldBacktester(Market.US, provider, cfg=cfg, hold=hold).run()
+    left_alone = HoldBacktester(
+        Market.US, provider, cfg=cfg,
+        hold=dataclasses.replace(hold, rebalance_weights=False),
+    ).run()
+
+    # Both hold the same two names; only the sizing policy differs, and letting
+    # the faster riser compound must end up ahead of trimming it every quarter.
+    assert left_alone.metrics.total_return_pct > trimmed.metrics.total_return_pct
+    assert left_alone.turnover_pct < trimmed.turnover_pct

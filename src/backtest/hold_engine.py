@@ -52,6 +52,11 @@ class HoldConfig:
     momentum_lookback: int = 252   # ~12 months
     momentum_skip: int = 21        # ~1 month, dropped to avoid short-term reversal
     commission_pct: float = 0.001  # charged on traded notional, both directions
+    # Equal-weight rebalancing is itself a form of selling winners: it trims
+    # whatever grew and tops up whatever lagged. That is the right default for
+    # measuring a selection rule, and the wrong one for letting a position
+    # compound, so the exit-rule experiments turn it off.
+    rebalance_weights: bool = True
     trade_start: str | None = None
     trade_end: str | None = None
 
@@ -71,6 +76,7 @@ class HoldResult:
     benchmark_metrics: Metrics
     universe_metrics: Metrics
     holdings_log: list[tuple[pd.Timestamp, list[str]]] = field(default_factory=list)
+    outcomes: list[PositionOutcome] = field(default_factory=list)
     turnover_pct: float = 0.0
 
 
@@ -186,6 +192,71 @@ def momentum_over(lookback: int, skip: int = 21, inner=momentum_12_1):
     return score
 
 
+@dataclass(frozen=True)
+class ExitContext:
+    """Everything an exit rule is allowed to look at, for one held name."""
+    symbol: str
+    day: pd.Timestamp
+    close: pd.Series          # closes up to and including `day` — never beyond
+    entry_day: pd.Timestamp
+    entry_price: float
+    price: float              # today's close
+
+
+ExitRule = "Callable[[ExitContext], bool]"
+
+
+def rank_drop_exit(ctx: ExitContext) -> bool:
+    """Default: sell anything that fell out of the ranking. Rotation."""
+    return True
+
+
+def never_exit(ctx: ExitContext) -> bool:
+    """Buy once and hold, whatever happens. The upper bound on letting winners run."""
+    return False
+
+
+def trend_break_exit(ma_window: int = 200, weeks: int = 4):
+    """Exit only when the trend is genuinely gone, not when the price merely fell.
+
+    A position must survive deep drawdowns to compound into something large — NVDA
+    fell 56% in 2018 and 66% in 2022 on its way up. A rule that rotates quarterly
+    exits at exactly those points, which is why it can never produce that outcome.
+    Requiring a sustained break below the long moving average tolerates the
+    drawdown while still cutting a name whose story is actually over.
+    """
+    bars = max(1, weeks * 5)
+
+    def rule(ctx: ExitContext) -> bool:
+        if len(ctx.close) < ma_window + bars:
+            return False  # not enough history to judge; holding is the safer default
+        avg = ctx.close.rolling(ma_window).mean()
+        recent = ctx.close.iloc[-bars:] < avg.iloc[-bars:]
+        return bool(recent.all())
+
+    return rule
+
+
+@dataclass(frozen=True)
+class PositionOutcome:
+    """One position's life, so results can be read as a distribution.
+
+    The mean edge of an 8-name book is not measurable (SPEC section 6c), so the
+    useful question is no longer "what was the average" but "what did the best
+    position do, and how many went nowhere".
+    """
+    symbol: str
+    entry_day: pd.Timestamp
+    exit_day: pd.Timestamp | None     # None = still held at the end of the window
+    entry_price: float
+    exit_price: float
+    contribution: float               # money: proceeds - cost, net of adds and trims
+
+    @property
+    def multiple(self) -> float:
+        return self.exit_price / self.entry_price if self.entry_price > 0 else 0.0
+
+
 Selector = "Callable[[list[tuple[float, str]], int], list[str]]"
 
 
@@ -272,6 +343,7 @@ class HoldBacktester:
         selector=None,
         members_at=None,
         scorer=None,
+        exit_rule=None,
     ) -> None:
         self._market = market
         self._provider = provider
@@ -290,6 +362,9 @@ class HoldBacktester:
         # without a second engine. The default ranks by 12-1 momentum, which
         # buys trends late by construction; see `not_yet_extended`.
         self._scorer = scorer or momentum_12_1
+        # Asked only about names that dropped out of the ranking. The default
+        # sells them, which is rotation; alternatives let a position ride.
+        self._exit_rule = exit_rule or rank_drop_exit
 
     def _load_panel(self) -> tuple[dict[str, pd.DataFrame], pd.DataFrame]:
         panel: dict[str, pd.DataFrame] = {}
@@ -351,6 +426,26 @@ class HoldBacktester:
                     total += qty * px
             return total
 
+        # Per-position bookkeeping, so the run can be read as a distribution of
+        # outcomes rather than a single average (SPEC section 6c: the average is
+        # not measurable at this basket size, but the spread is informative).
+        entries: dict[str, tuple[pd.Timestamp, float]] = {}
+        cost: dict[str, float] = {}
+        proceeds_by_sym: dict[str, float] = {}
+        outcomes: list[PositionOutcome] = []
+
+        def open_position(sym: str, day, px: float) -> None:
+            entries.setdefault(sym, (day, px))
+
+        def close_position(sym: str, day, px: float, proceeds: float) -> None:
+            entry_day, entry_px = entries.pop(sym, (day, px))
+            got = proceeds_by_sym.pop(sym, 0.0) + proceeds
+            outcomes.append(PositionOutcome(
+                symbol=sym, entry_day=entry_day, exit_day=day,
+                entry_price=entry_px, exit_price=px,
+                contribution=got - cost.pop(sym, 0.0),
+            ))
+
         for i, day in enumerate(dates):
             if i % hold.rebalance_days == 0:
                 eligible = self._members_at(day) if self._members_at else None
@@ -365,39 +460,89 @@ class HoldBacktester:
 
                 if ranked:
                     chosen = self._selector(ranked, hold.top_n)
-                    equity_now = portfolio_value(day)
-                    target_value = equity_now / len(chosen)
 
-                    # Sell what dropped out of the ranking, then size every held
-                    # name to an equal share of the book.
+                    # A name that fell out of the ranking is offered to the exit
+                    # rule rather than sold outright. The default sells it, which
+                    # is rotation; other rules let the position keep running.
+                    kept: list[str] = []
                     for sym in list(shares):
-                        if sym not in chosen:
-                            px = price(sym, day)
-                            if px is not None:
-                                proceeds = shares[sym] * px
-                                traded_notional += proceeds
-                                cash += proceeds * (1 - hold.commission_pct)
-                                del shares[sym]
-
-                    for sym in chosen:
+                        if sym in chosen:
+                            continue
                         px = price(sym, day)
                         if px is None:
                             continue
-                        current = shares.get(sym, 0.0) * px
-                        delta = target_value - current
-                        if abs(delta) < target_value * 0.01:
-                            continue  # skip trivial rebalancing churn
-                        traded_notional += abs(delta)
-                        if delta > 0 and cash >= delta:
-                            cash -= delta * (1 + hold.commission_pct)
-                            shares[sym] = shares.get(sym, 0.0) + delta / px
-                        elif delta < 0:
-                            cash += -delta * (1 - hold.commission_pct)
-                            shares[sym] = max(shares.get(sym, 0.0) + delta / px, 0.0)
+                        entry_day, entry_px = entries[sym]
+                        leaving = self._exit_rule(ExitContext(
+                            symbol=sym, day=day, close=panel[sym]["close"].loc[:day],
+                            entry_day=entry_day, entry_price=entry_px, price=px,
+                        ))
+                        if not leaving:
+                            kept.append(sym)
+                            continue
+                        proceeds = shares[sym] * px
+                        traded_notional += proceeds
+                        cash += proceeds * (1 - hold.commission_pct)
+                        close_position(sym, day, px, proceeds)
+                        del shares[sym]
 
-                    holdings_log.append((day, chosen))
+                    if hold.rebalance_weights:
+                        book = chosen + kept
+                        equity_now = portfolio_value(day)
+                        target_value = equity_now / len(book)
+                        for sym in book:
+                            px = price(sym, day)
+                            if px is None:
+                                continue
+                            current = shares.get(sym, 0.0) * px
+                            delta = target_value - current
+                            if abs(delta) < target_value * 0.01:
+                                continue  # skip trivial rebalancing churn
+                            traded_notional += abs(delta)
+                            if delta > 0 and cash >= delta:
+                                cash -= delta * (1 + hold.commission_pct)
+                                open_position(sym, day, px)
+                                shares[sym] = shares.get(sym, 0.0) + delta / px
+                                cost[sym] = cost.get(sym, 0.0) + delta
+                            elif delta < 0:
+                                cash += -delta * (1 - hold.commission_pct)
+                                shares[sym] = max(shares.get(sym, 0.0) + delta / px, 0.0)
+                                cost[sym] = cost.get(sym, 0.0) + delta
+                    else:
+                        # Existing positions are left completely alone, so a winner
+                        # compounds instead of being trimmed back to equal weight.
+                        # Only genuinely new names are bought, out of spare cash.
+                        new = [s for s in chosen if s not in shares]
+                        if new and cash > 0:
+                            budget = cash / len(new)
+                            for sym in new:
+                                px = price(sym, day)
+                                if px is None or cash < budget:
+                                    continue
+                                spend = budget / (1 + hold.commission_pct)
+                                cash -= budget
+                                traded_notional += spend
+                                open_position(sym, day, px)
+                                shares[sym] = shares.get(sym, 0.0) + spend / px
+                                cost[sym] = cost.get(sym, 0.0) + spend
+
+                    holdings_log.append((day, chosen + kept))
 
             equity_points.append((day, portfolio_value(day)))
+
+        # Positions still open when the window ends are outcomes too — leaving
+        # them out would drop exactly the winners a hold rule is meant to keep.
+        last_day = dates[-1]
+        for sym in list(shares):
+            px = price(sym, last_day)
+            if px is None:
+                continue
+            entry_day, entry_px = entries.get(sym, (last_day, px))
+            outcomes.append(PositionOutcome(
+                symbol=sym, entry_day=entry_day, exit_day=None,
+                entry_price=entry_px, exit_price=px,
+                contribution=(shares[sym] * px + proceeds_by_sym.get(sym, 0.0)
+                              - cost.get(sym, 0.0)),
+            ))
 
         equity = pd.Series(dict(equity_points)).sort_index()
 
@@ -422,5 +567,6 @@ class HoldBacktester:
             benchmark_metrics=compute_metrics(bench, []),
             universe_metrics=compute_metrics(universe, []),
             holdings_log=holdings_log,
+            outcomes=outcomes,
             turnover_pct=round(traded_notional / hold.start_equity * 100.0, 1),
         )
