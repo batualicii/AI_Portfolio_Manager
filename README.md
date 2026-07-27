@@ -112,10 +112,22 @@ decide the answer quietly, so the capped leg runs under all three handlings
 (exclude = optimistic, own = middle, shared = pessimistic) and a verdict is only
 reported when they agree.
 
+**The entry point, which the rule had backwards.** The goal is to own a company
+while it is still climbing. 12-1 momentum does the opposite by construction — it
+ranks by what has *already* risen most over a year, so it buys trends at their
+most extended. `scripts/hold_early_trend.py` tests the correction: same ranking,
+but a name more than N% above its 200-day average is not eligible. Both legs run
+with the same sector cap and dates, so one thing differs.
+
+What no leg here can test: whether the company is any good. Every rule reads price
+only, and free data carries no usable fundamental history (SPEC §6c). "The next
+NVDA" is a claim about a business; this measures the timing half of it.
+
 ```bash
 python -m scripts.build_pit_universe --check   # membership + price coverage
 python -m scripts.build_sector_map             # GICS sector per symbol
 python -m scripts.hold_sector_neutral          # does the edge survive the cap?
+python -m scripts.hold_early_trend             # does entering earlier help?
 ```
 
 Nothing here clears the SPEC §6b gate. Ten years, one selector, one market.

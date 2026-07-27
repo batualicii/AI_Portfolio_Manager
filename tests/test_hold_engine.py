@@ -414,3 +414,81 @@ def test_the_sector_cap_drives_a_real_run_away_from_the_hottest_sector():
 
     assert all(set(h) == {"T1", "T2"} for _, h in uncapped.holdings_log)
     assert all(set(h) == {"T1", "H1"} for _, h in capped.holdings_log)
+
+
+# ------------------- early-trend scoring (pluggable scorer) ------------------
+
+def test_extension_measures_distance_above_the_moving_average():
+    from src.backtest.hold_engine import extension_pct
+
+    # 199 bars at 100, last bar at 110 -> average ~100.05, so ~+10%.
+    close = pd.Series([100.0] * 199 + [110.0])
+    assert extension_pct(close, ma_window=200) == pytest.approx(0.0995, abs=1e-3)
+
+
+def test_extension_is_none_without_a_full_moving_average_window():
+    from src.backtest.hold_engine import extension_pct
+
+    assert extension_pct(pd.Series([100.0] * 50), ma_window=200) is None
+
+
+def test_an_already_vertical_name_scores_none_rather_than_low():
+    """Ineligible and weak must not be confused — None drops it from the ranking."""
+    from src.backtest.hold_engine import not_yet_extended
+
+    score = not_yet_extended(max_extension=0.25, ma_window=200)
+    stretched = pd.Series([100.0] * 279 + [300.0])          # far above its average
+    assert score(stretched, HOLD) is None
+
+
+def test_a_name_still_near_its_average_keeps_its_momentum_score():
+    from src.backtest.hold_engine import momentum_12_1, not_yet_extended
+
+    bars = momentum_uptrend(400, daily_pct=0.002)
+    close = ind.bars_to_frame(bars)["close"]
+    score = not_yet_extended(max_extension=10.0, ma_window=200)  # cap never binds
+    assert score(close, HOLD) == pytest.approx(momentum_12_1(close, HOLD))
+
+
+def test_a_shorter_lookback_scores_a_different_window():
+    from src.backtest.hold_engine import momentum_12_1, momentum_over
+
+    # Flat for a year, then a recent climb: 12-month momentum sees mostly flat,
+    # 6-month momentum sees the climb.
+    close = pd.Series([100.0] * 200 + [100.0 + i for i in range(120)])
+    short = momentum_over(126)(close, HOLD)
+    long = momentum_12_1(close, HOLD)
+    assert short is not None and long is not None
+    assert short > long
+
+
+def test_the_engine_uses_a_custom_scorer_when_given_one():
+    bars = {"A": momentum_uptrend(400, daily_pct=0.002),
+            "B": momentum_uptrend(400, daily_pct=0.008)}
+    provider = _provider(bars, momentum_uptrend(400))
+
+    # Invert the ranking: the weaker riser should now be the one held.
+    inverted = lambda close, cfg: -close.iloc[-1]  # noqa: E731
+    result = HoldBacktester(
+        Market.US, provider, cfg=_cfg("A", "B"),
+        hold=dataclasses.replace(HOLD, top_n=1), scorer=inverted,
+    ).run()
+
+    assert result.holdings_log
+    assert all(held == ["A"] for _, held in result.holdings_log)
+
+
+def test_the_extension_cap_changes_which_names_a_real_run_holds():
+    from src.backtest.hold_engine import not_yet_extended
+
+    bars = {"STEADY": momentum_uptrend(400, daily_pct=0.0015),
+            "VERTICAL": momentum_uptrend(400, daily_pct=0.012)}
+    provider = _provider(bars, momentum_uptrend(400))
+    cfg, hold = _cfg("STEADY", "VERTICAL"), dataclasses.replace(HOLD, top_n=1)
+
+    plain = HoldBacktester(Market.US, provider, cfg=cfg, hold=hold).run()
+    early = HoldBacktester(Market.US, provider, cfg=cfg, hold=hold,
+                           scorer=not_yet_extended(0.25, 200)).run()
+
+    assert all(held == ["VERTICAL"] for _, held in plain.holdings_log)
+    assert all(held == ["STEADY"] for _, held in early.holdings_log)

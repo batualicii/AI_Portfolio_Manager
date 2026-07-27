@@ -27,6 +27,7 @@ point-in-time membership (`members_at`), not just a shared universe — see
 """
 from __future__ import annotations
 
+import dataclasses
 import logging
 from dataclasses import dataclass, field
 
@@ -122,6 +123,69 @@ def momentum_12_1(close: pd.Series, cfg: HoldConfig) -> float | None:
     return end / start - 1.0
 
 
+Scorer = "Callable[[pd.Series, HoldConfig], float | None]"
+
+
+def extension_pct(close: pd.Series, ma_window: int = 200) -> float | None:
+    """How far above its moving average the price sits, as a fraction.
+
+    The plain reading of "is this name already extended". 0.10 means 10% above
+    the 200-day average; a name grinding along its average reads near zero, and
+    one that has gone vertical reads high.
+    """
+    if len(close) < ma_window:
+        return None
+    avg = float(close.iloc[-ma_window:].mean())
+    if avg <= 0:
+        return None
+    return float(close.iloc[-1]) / avg - 1.0
+
+
+def not_yet_extended(max_extension: float = 0.25, ma_window: int = 200,
+                     inner=momentum_12_1):
+    """Momentum, but only for names that have not already gone vertical.
+
+    12-1 momentum ranks by what has *already* risen most over a year, so on its
+    own it systematically buys trends late — the opposite of holding a company
+    from before the move. This wraps it with the cheapest available measure of
+    "how late": distance above the 200-day average. A name still near its
+    average is early in a trend; one far above it has had the move.
+
+    Returns None for the extended names, which the engine reads as "no score",
+    so they drop out of the ranking rather than being ranked lower — an
+    ineligible name and a weak one must not be confused.
+
+    Note what this cannot do: nothing here knows whether a company is well run
+    or has a large market ahead of it. Historical fundamentals are not available
+    for free (SPEC section 6c), so the fundamental half of "pick the next NVDA"
+    is untested, not implemented. This is the price-based half only.
+    """
+    def score(close: pd.Series, cfg: HoldConfig) -> float | None:
+        base = inner(close, cfg)
+        if base is None:
+            return None
+        ext = extension_pct(close, ma_window)
+        if ext is None or ext > max_extension:
+            return None
+        return base
+
+    return score
+
+
+def momentum_over(lookback: int, skip: int = 21, inner=momentum_12_1):
+    """The same momentum measure over a different window.
+
+    A shorter window reacts to a trend sooner, at the cost of catching more
+    noise; testing 3, 6 and 12 months is how you find out which side of that
+    trade-off this universe actually rewards.
+    """
+    def score(close: pd.Series, cfg: HoldConfig) -> float | None:
+        return inner(close, dataclasses.replace(
+            cfg, momentum_lookback=lookback, momentum_skip=skip))
+
+    return score
+
+
 Selector = "Callable[[list[tuple[float, str]], int], list[str]]"
 
 
@@ -207,6 +271,7 @@ class HoldBacktester:
         hold: HoldConfig | None = None,
         selector=None,
         members_at=None,
+        scorer=None,
     ) -> None:
         self._market = market
         self._provider = provider
@@ -221,6 +286,10 @@ class HoldBacktester:
         # survivorship bias described in SPEC section 6c. Supplying it restricts
         # each decision to the names actually available at the time.
         self._members_at = members_at
+        # Swappable so a different definition of "worth holding" can be tested
+        # without a second engine. The default ranks by 12-1 momentum, which
+        # buys trends late by construction; see `not_yet_extended`.
+        self._scorer = scorer or momentum_12_1
 
     def _load_panel(self) -> tuple[dict[str, pd.DataFrame], pd.DataFrame]:
         panel: dict[str, pd.DataFrame] = {}
@@ -290,7 +359,7 @@ class HoldBacktester:
                     if eligible is not None and sym not in eligible:
                         continue  # not in the index on this date
                     window = df["close"].loc[:day]
-                    score = momentum_12_1(window, hold)
+                    score = self._scorer(window, hold)
                     if score is not None and price(sym, day) is not None:
                         ranked.append((score, sym))
 
