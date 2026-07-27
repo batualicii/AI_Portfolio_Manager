@@ -234,11 +234,12 @@ def trend_break_exit(ma_window: int = 200, weeks: int = 4):
     bars = max(1, weeks * 5)
 
     def rule(ctx: ExitContext) -> bool:
-        if len(ctx.close) < ma_window + bars:
-            return False  # not enough history to judge; holding is the safer default
-        avg = ctx.close.rolling(ma_window).mean()
-        recent = ctx.close.iloc[-bars:] < avg.iloc[-bars:]
-        return bool(recent.all())
+        # Shared with the live thesis monitor, so the backtested rule and the
+        # rule that will actually alert cannot drift apart.
+        verdict = ind.sustained_below_ma(ctx.close, ma_window, bars)
+        # No verdict means not enough history to judge; holding is the safer
+        # default, since an absent answer must not be read as "sell".
+        return bool(verdict)
 
     return rule
 

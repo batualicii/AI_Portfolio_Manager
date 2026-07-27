@@ -105,3 +105,21 @@ def test_bollinger_bands_bracket_the_middle_band():
 def test_rate_of_change_is_a_percentage():
     close = pd.Series([100.0, 105.0, 110.0])
     assert ind.rate_of_change(close, 2).iloc[-1] == pytest.approx(10.0)
+
+
+def test_sustained_below_ma_needs_the_break_to_hold_every_day():
+    """The difference between "the price fell" and "the trend is over"."""
+    from src.signals.indicators import sustained_below_ma
+
+    dead = pd.Series([100.0] * 230 + [60.0] * 20)
+    assert sustained_below_ma(dead, 200, 20) is True
+
+    # One day back above the average breaks the streak.
+    recovered = pd.Series([100.0] * 230 + [60.0] * 19 + [130.0])
+    assert sustained_below_ma(recovered, 200, 20) is False
+
+
+def test_sustained_below_ma_says_it_cannot_judge_rather_than_guessing():
+    from src.signals.indicators import sustained_below_ma
+
+    assert sustained_below_ma(pd.Series([100.0] * 50), 200, 20) is None

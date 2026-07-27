@@ -45,6 +45,33 @@ def ema(series: pd.Series, window: int) -> pd.Series:
     return series.ewm(span=window, adjust=False, min_periods=window).mean()
 
 
+def sustained_below_ma(
+    close: pd.Series, ma_window: int = 200, bars: int = 20
+) -> bool | None:
+    """Has every one of the last `bars` closes sat below the moving average?
+
+    The difference between "the price fell" and "the trend is over". A single
+    dip below the average is noise; a sustained one is the story changing. This
+    tolerates the deep drawdowns a position must survive to compound while still
+    marking a name whose trend has genuinely ended.
+
+    None when there is not enough history to judge, which callers must read as
+    "no verdict" rather than as False — an absent answer and a negative one mean
+    different things.
+
+    Lives here, in the shared numeric layer, because the backtest's exit rule and
+    the live thesis monitor must use the identical definition. This project has
+    already shipped one bug where a live formula and its backtest counterpart
+    drifted apart (SPEC section 6c); sharing the primitive is how that is
+    prevented rather than merely regretted.
+    """
+    if bars < 1 or len(close) < ma_window + bars:
+        return None
+    avg = sma(close, ma_window)
+    recent = close.iloc[-bars:] < avg.iloc[-bars:]
+    return bool(recent.all())
+
+
 def rsi(close: pd.Series, window: int = 14) -> pd.Series:
     """Wilder's RSI in [0, 100]."""
     delta = close.diff()
