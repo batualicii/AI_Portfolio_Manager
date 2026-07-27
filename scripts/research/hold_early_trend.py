@@ -25,9 +25,9 @@ The price-based half is what this decides.
 Requires `build_pit_universe` and `build_sector_map`.
 
 Usage:
-    python -m scripts.hold_early_trend
-    python -m scripts.hold_early_trend --max-extension 0.15
-    python -m scripts.hold_early_trend --lookbacks 63,126,252
+    python -m scripts.research.hold_early_trend
+    python -m scripts.research.hold_early_trend --max-extension 0.15
+    python -m scripts.research.hold_early_trend --lookbacks 63,126,252
 """
 from __future__ import annotations
 
@@ -52,7 +52,7 @@ from src.market.yahoo import YahooProvider
 from src.models import Market
 from src.signals.config import SignalConfig
 
-ROOT = pathlib.Path(__file__).resolve().parent.parent
+ROOT = pathlib.Path(__file__).resolve().parent.parent.parent
 PIT = ROOT / "universes" / "sp500_pit.json"
 SECTORS = ROOT / "universes" / "sectors.json"
 
@@ -94,7 +94,7 @@ def main() -> int:
     for path, cmd in ((PIT, "build_pit_universe"), (SECTORS, "build_sector_map")):
         if not path.exists():
             print(f"missing {path.relative_to(ROOT)} — run "
-                  f"`python -m scripts.{cmd}` first")
+                  f"`python -m scripts.research.{cmd}` first")
             return 1
 
     logging.basicConfig(level=logging.WARNING)

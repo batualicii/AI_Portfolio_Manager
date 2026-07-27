@@ -37,7 +37,7 @@ from src.market.yahoo import YahooProvider
 from src.models import Market
 from src.signals.config import SignalConfig
 
-ROOT = pathlib.Path(__file__).resolve().parent.parent
+ROOT = pathlib.Path(__file__).resolve().parent.parent.parent
 SP500 = ROOT / "universes" / "sp500.json"
 
 

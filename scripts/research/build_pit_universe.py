@@ -18,8 +18,8 @@ coverage rather than assuming it — a reconstruction that cannot be priced is w
 knowing about before it silently becomes the basis of a result.
 
 Usage:
-    python -m scripts.build_pit_universe            # build and report
-    python -m scripts.build_pit_universe --check    # also probe price availability
+    python -m scripts.research.build_pit_universe            # build and report
+    python -m scripts.research.build_pit_universe --check    # also probe price availability
 """
 from __future__ import annotations
 
@@ -31,7 +31,7 @@ import pathlib
 import re
 import urllib.request
 
-ROOT = pathlib.Path(__file__).resolve().parent.parent
+ROOT = pathlib.Path(__file__).resolve().parent.parent.parent
 OUT = ROOT / "universes" / "sp500_pit.json"
 WIKI = "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
 

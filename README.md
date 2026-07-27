@@ -22,10 +22,14 @@ design and the honesty/risk notes.
 | 7 | Offline test suite (209 tests, no network needed) | ✅ Done |
 | 8 | Re-validate against an honest benchmark | ✅ Done — **strategy fails the gate** |
 | 9 | Selection engine (momentum, point-in-time, sector-neutral) | ✅ Done — **also fails** |
-| 10 | Pivot: thesis tracking + discipline, not signals | 🚧 In progress |
+| 10 | Pivot: thesis tracking + discipline, not signals | ✅ Done |
 
-**Software is v1 feature-complete. The signal strategy is finished — it did not work, and
-Stage 10 is the change that follows from that.**
+**The signal strategy is finished — it did not work, and Stage 10 is the change that
+follows from that. What runs now records your reasoning and holds you to it.**
+
+Backtests and concluded experiments live under `scripts/research/`; they are evidence,
+not product, and [SPEC §6c](SPEC.md) explains why they must not be used as a tuning
+surface.
 
 ## ⛔ Do not trade this yet — it fails its own validation gate
 
@@ -86,9 +90,9 @@ Three claims were tested and two of them died:
    whose survival was guaranteed by construction.
 3. **The edge survives point-in-time membership.** Partly, and unevenly.
 
-`scripts/build_pit_universe.py` reconstructs membership by walking Wikipedia's
+`scripts/research/build_pit_universe.py` reconstructs membership by walking Wikipedia's
 change table backwards, recovering 236 names that were in the index and are not
-today. Running both legs in that universe (`scripts/hold_pit_compare.py`), 2017–2026:
+today. Running both legs in that universe (`scripts/research/hold_pit_compare.py`), 2017–2026:
 
 | | measured |
 |---|---|
@@ -106,7 +110,7 @@ semiconductor/AI regime. The losing years are not small either (2019 −13.5, 20
 be priced, so the rest remain silently excluded even from the point-in-time leg.
 
 **Open question, and the next test:** whether the edge is company selection or one
-sector bet wearing its clothes. `scripts/hold_sector_neutral.py` caps the book at
+sector bet wearing its clothes. `scripts/research/hold_sector_neutral.py` caps the book at
 N names per GICS sector and re-runs both legs. If the edge survives the cap, the
 sector explanation is excluded; if it collapses, the return was the sector.
 
@@ -120,7 +124,7 @@ reported when they agree.
 **The entry point, which the rule had backwards.** The goal is to own a company
 while it is still climbing. 12-1 momentum does the opposite by construction — it
 ranks by what has *already* risen most over a year, so it buys trends at their
-most extended. `scripts/hold_early_trend.py` tests the correction: same ranking,
+most extended. `scripts/research/hold_early_trend.py` tests the correction: same ranking,
 but a name more than N% above its 200-day average is not eligible. Both legs run
 with the same sector cap and dates, so one thing differs.
 
@@ -129,11 +133,11 @@ only, and free data carries no usable fundamental history (SPEC §6c). "The next
 NVDA" is a claim about a business; this measures the timing half of it.
 
 ```bash
-python -m scripts.build_pit_universe --check   # membership + price coverage
-python -m scripts.build_sector_map             # GICS sector per symbol
-python -m scripts.hold_sector_neutral          # does the edge survive the cap?
-python -m scripts.hold_early_trend             # does entering earlier help?
-python -m scripts.hold_exit_rules --cohorts 8  # does letting winners run help?
+python -m scripts.research.build_pit_universe --check   # membership + price coverage
+python -m scripts.research.build_sector_map             # GICS sector per symbol
+python -m scripts.research.hold_sector_neutral          # does the edge survive the cap?
+python -m scripts.research.hold_early_trend             # does entering earlier help?
+python -m scripts.research.hold_exit_rules --cohorts 8  # does letting winners run help?
 ```
 
 ## Using it now
@@ -234,9 +238,9 @@ The backtest is the gate SPEC §6b puts in front of real money. Run all three an
 [SPEC §6c](SPEC.md) for what the numbers can and cannot tell you:
 
 ```bash
-python -m scripts.run_backtest        # strategy vs equal-weight watchlist vs index
-python -m scripts.walk_forward        # the same fixed strategy, year by year
-python -m scripts.run_core_satellite  # how the 70/30 blend behaves
+python -m scripts.research.run_backtest        # strategy vs equal-weight watchlist vs index
+python -m scripts.research.walk_forward        # the same fixed strategy, year by year
+python -m scripts.research.run_core_satellite  # how the 70/30 blend behaves
 ```
 
 Judge against the **equal-weight watchlist** column, not the index. The watchlist is a

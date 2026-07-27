@@ -17,10 +17,10 @@ Two honesty guards, because a half-working fix is worse than a known-broken one:
   * the "today's membership" leg is re-run here rather than quoted from an
     earlier session, so both legs share code, costs, and dates.
 
-Run `python -m scripts.build_pit_universe` first.
+Run `python -m scripts.research.build_pit_universe` first.
 
 Usage:
-    python -m scripts.hold_pit_compare --from-year 2017 --to-year 2026
+    python -m scripts.research.hold_pit_compare --from-year 2017 --to-year 2026
 """
 from __future__ import annotations
 
@@ -36,7 +36,7 @@ from src.market.yahoo import YahooProvider
 from src.models import Market
 from src.signals.config import SignalConfig
 
-ROOT = pathlib.Path(__file__).resolve().parent.parent
+ROOT = pathlib.Path(__file__).resolve().parent.parent.parent
 PIT = ROOT / "universes" / "sp500_pit.json"
 TODAY = ROOT / "universes" / "sp500.json"
 
@@ -51,7 +51,7 @@ def main() -> int:
 
     if not PIT.exists():
         print(f"missing {PIT.relative_to(ROOT)} — run "
-              f"`python -m scripts.build_pit_universe` first")
+              f"`python -m scripts.research.build_pit_universe` first")
         return 1
 
     logging.basicConfig(level=logging.WARNING)

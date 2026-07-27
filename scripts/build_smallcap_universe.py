@@ -27,7 +27,7 @@ import json
 import pathlib
 import re
 
-from scripts.build_pit_universe import _cells, _fetch
+from scripts.research.build_pit_universe import _cells, _fetch
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 OUT = ROOT / "universes" / "sp600.json"

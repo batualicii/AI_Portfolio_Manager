@@ -66,15 +66,16 @@ class PortfolioBot:
         settings: Settings,
         store: Store,
         provider: MarketDataProvider,
-        engine: SignalEngine,
+        engine: SignalEngine | None = None,
         narrator: ClaudeNarrator | None = None,
     ) -> None:
         self._settings = settings
         self._store = store
         self._valuation = ValuationService(provider)
         self._monitor = ThesisMonitor(provider)
-        # Kept only so the research scripts and tests can still construct a bot;
-        # nothing on the live path calls it any more (SPEC section 0).
+        # Optional and unused on the live path. The signal engine still exists
+        # for the concluded experiments in scripts/research, but the bot no
+        # longer asks it anything (SPEC section 0).
         self._engine = engine
         self._narrator = narrator
         self._scheduler: AsyncIOScheduler | None = None

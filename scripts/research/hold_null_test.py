@@ -19,9 +19,9 @@ concentrates precisely into the names whose survival was guaranteed. The random
 control is subject to the same distortion, which is what makes it the fair test.
 
 Usage:
-    python -m scripts.hold_null_test US               # 200 random portfolios
-    python -m scripts.hold_null_test US --trials 500
-    python -m scripts.hold_null_test US --top 8 --sweep
+    python -m scripts.research.hold_null_test US               # 200 random portfolios
+    python -m scripts.research.hold_null_test US --trials 500
+    python -m scripts.research.hold_null_test US --top 8 --sweep
 """
 from __future__ import annotations
 
@@ -38,7 +38,7 @@ from src.market.yahoo import YahooProvider
 from src.models import Market
 from src.signals.config import SignalConfig
 
-ROOT = pathlib.Path(__file__).resolve().parent.parent
+ROOT = pathlib.Path(__file__).resolve().parent.parent.parent
 SP500 = ROOT / "universes" / "sp500.json"
 
 

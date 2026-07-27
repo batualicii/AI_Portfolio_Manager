@@ -16,8 +16,8 @@ Coverage is written into the file and printed, because a sector cap applied to a
 map with large holes tests something other than what it claims to.
 
 Usage:
-    python -m scripts.build_sector_map           # fill in whatever is missing
-    python -m scripts.build_sector_map --limit 50   # partial pass, resumable
+    python -m scripts.research.build_sector_map           # fill in whatever is missing
+    python -m scripts.research.build_sector_map --limit 50   # partial pass, resumable
 """
 from __future__ import annotations
 
@@ -27,9 +27,9 @@ import json
 import pathlib
 import re
 
-from scripts.build_pit_universe import WIKI, _cells, _fetch
+from scripts.research.build_pit_universe import WIKI, _cells, _fetch
 
-ROOT = pathlib.Path(__file__).resolve().parent.parent
+ROOT = pathlib.Path(__file__).resolve().parent.parent.parent
 PIT = ROOT / "universes" / "sp500_pit.json"
 OUT = ROOT / "universes" / "sectors.json"
 
@@ -52,7 +52,7 @@ def _universe() -> list[str]:
     """Everyone who was a member at any point, plus today's members."""
     if not PIT.exists():
         raise SystemExit(f"missing {PIT.relative_to(ROOT)} — run "
-                         f"`python -m scripts.build_pit_universe` first")
+                         f"`python -m scripts.research.build_pit_universe` first")
     pit = json.loads(PIT.read_text())
     ever: set[str] = set()
     for members in pit["by_year"].values():
@@ -144,7 +144,7 @@ def main() -> int:
               "\n  rounding error, which is why `hold_sector_neutral` runs the capped "
               "\n  leg under all three handlings and only calls a verdict when they "
               "\n  agree. A gap here does not block the test; it is priced into it.")
-    print("\n  Next: python -m scripts.hold_sector_neutral")
+    print("\n  Next: python -m scripts.research.hold_sector_neutral")
     return 0
 
 

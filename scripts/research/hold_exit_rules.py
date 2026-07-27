@@ -28,8 +28,8 @@ tested against.
 Requires `build_pit_universe` and `build_sector_map`.
 
 Usage:
-    python -m scripts.hold_exit_rules
-    python -m scripts.hold_exit_rules --top 8 --period 10y
+    python -m scripts.research.hold_exit_rules
+    python -m scripts.research.hold_exit_rules --top 8 --period 10y
 """
 from __future__ import annotations
 
@@ -54,7 +54,7 @@ from src.market.yahoo import YahooProvider
 from src.models import Market
 from src.signals.config import SignalConfig
 
-ROOT = pathlib.Path(__file__).resolve().parent.parent
+ROOT = pathlib.Path(__file__).resolve().parent.parent.parent
 PIT = ROOT / "universes" / "sp500_pit.json"
 SECTORS = ROOT / "universes" / "sectors.json"
 
@@ -155,7 +155,7 @@ def main() -> int:
     for path, cmd in ((PIT, "build_pit_universe"), (SECTORS, "build_sector_map")):
         if not path.exists():
             print(f"missing {path.relative_to(ROOT)} — run "
-                  f"`python -m scripts.{cmd}` first")
+                  f"`python -m scripts.research.{cmd}` first")
             return 1
 
     logging.basicConfig(level=logging.WARNING)

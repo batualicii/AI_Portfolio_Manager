@@ -29,12 +29,12 @@ decides the answer, so the capped leg runs under all three handlings at once and
 the verdict is only reported as clean when they agree. A split verdict means the
 coverage gap is deciding, not the strategy, and it says so.
 
-Requires `python -m scripts.build_pit_universe` and `python -m scripts.build_sector_map`.
+Requires `python -m scripts.research.build_pit_universe` and `python -m scripts.research.build_sector_map`.
 
 Usage:
-    python -m scripts.hold_sector_neutral                    # brackets all three
-    python -m scripts.hold_sector_neutral --unknown own      # one handling only
-    python -m scripts.hold_sector_neutral --max-per-sector 3
+    python -m scripts.research.hold_sector_neutral                    # brackets all three
+    python -m scripts.research.hold_sector_neutral --unknown own      # one handling only
+    python -m scripts.research.hold_sector_neutral --max-per-sector 3
 """
 from __future__ import annotations
 
@@ -59,7 +59,7 @@ from src.market.yahoo import YahooProvider
 from src.models import Market
 from src.signals.config import SignalConfig
 
-ROOT = pathlib.Path(__file__).resolve().parent.parent
+ROOT = pathlib.Path(__file__).resolve().parent.parent.parent
 PIT = ROOT / "universes" / "sp500_pit.json"
 SECTORS = ROOT / "universes" / "sectors.json"
 
@@ -85,7 +85,7 @@ def main() -> int:
     for path, cmd in ((PIT, "build_pit_universe"), (SECTORS, "build_sector_map")):
         if not path.exists():
             print(f"missing {path.relative_to(ROOT)} — run "
-                  f"`python -m scripts.{cmd}` first")
+                  f"`python -m scripts.research.{cmd}` first")
             return 1
 
     logging.basicConfig(level=logging.WARNING)

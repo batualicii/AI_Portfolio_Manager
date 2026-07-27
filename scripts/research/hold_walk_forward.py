@@ -20,8 +20,8 @@ tested. The crash behaviour is still informative — if the strategy collapses e
 on a universe rigged in its favour, that settles it.
 
 Usage:
-    python -m scripts.hold_walk_forward US
-    python -m scripts.hold_walk_forward US --period 10y --top 8
+    python -m scripts.research.hold_walk_forward US
+    python -m scripts.research.hold_walk_forward US --period 10y --top 8
 """
 from __future__ import annotations
 
@@ -36,7 +36,7 @@ from src.market.yahoo import YahooProvider
 from src.models import Market
 from src.signals.config import SignalConfig
 
-ROOT = pathlib.Path(__file__).resolve().parent.parent
+ROOT = pathlib.Path(__file__).resolve().parent.parent.parent
 SP500 = ROOT / "universes" / "sp500.json"
 
 
