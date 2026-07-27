@@ -1,12 +1,14 @@
 # AI Portfolio Manager
 
-An **advisory** swing-trading assistant for the **US** and **Turkish (BIST)** markets,
-delivered as a personal **Telegram bot**. It recommends buy/sell/hold calls with stop-loss
-and target levels — you place the trades yourself in Midas. See [SPEC.md](SPEC.md) for the
-full design and the (important) honesty/risk notes.
+A personal **Telegram bot** for a **US + Turkish (BIST)** portfolio. It does **not** tell
+you what to buy. It records why you own each position, watches for the specific conditions
+that would prove that reasoning wrong, and holds you to the position limits and trading
+pace you set yourself. You research and execute in Midas. See [SPEC.md](SPEC.md) for the
+design and the honesty/risk notes.
 
-> ⚠️ **Not financial advice and not a guarantee.** Signals are validated by backtest before
-> real money (SPEC §6b). Start with small position sizes. No system reliably beats the market.
+> ⚠️ **Not financial advice and not a guarantee.** Nothing here claims to beat an index —
+> SPEC §6c shows that at this portfolio size such a claim is not even measurable. Start
+> small. Being wrong should be survivable by design, not by luck.
 
 ## Build status
 | Stage | What | Status |
@@ -14,13 +16,16 @@ full design and the (important) honesty/risk notes.
 | 1 | Skeleton + Telegram bot + holdings sync (SQLite) | ✅ Done |
 | 2 | Market data layer (US + BIST via yfinance, news) | ✅ Done |
 | 3 | Deterministic signal engine (technicals + fundamentals + sentiment + macro) | ✅ Done |
-| 4 | Backtest + benchmark → **core-satellite** design chosen | ✅ Done |
+| 4 | Backtest + benchmark → core-satellite design chosen | ✅ Done |
 | 5 | Claude reasoning layer (explanation only) | ✅ Done |
-| 6 | Daily digest + 08:30 Europe/Istanbul scheduler | ✅ Done |
-| 7 | Offline test suite (169 tests, no network needed) | ✅ Done |
+| 6 | Digest + Europe/Istanbul scheduler | ✅ Done |
+| 7 | Offline test suite (209 tests, no network needed) | ✅ Done |
 | 8 | Re-validate against an honest benchmark | ✅ Done — **strategy fails the gate** |
+| 9 | Selection engine (momentum, point-in-time, sector-neutral) | ✅ Done — **also fails** |
+| 10 | Pivot: thesis tracking + discipline, not signals | 🚧 In progress |
 
-**Software is v1 feature-complete. The strategy is not.**
+**Software is v1 feature-complete. The signal strategy is finished — it did not work, and
+Stage 10 is the change that follows from that.**
 
 ## ⛔ Do not trade this yet — it fails its own validation gate
 
@@ -131,6 +136,42 @@ python -m scripts.hold_early_trend             # does entering earlier help?
 ```
 
 Nothing here clears the SPEC §6b gate. Ten years, one selector, one market.
+
+## Why the project changed direction
+
+The two sections above are the whole record: two generations of signal engine, measured
+honestly, neither of which worked. The decisive finding was not that a particular rule
+failed — it was **why we could never have known if one succeeded**.
+
+The annual edge of an 8-name portfolio has a standard deviation of **13.3 pp**. The
++6.6 pp/yr we measured over ten years therefore has a standard error of 4.2: not
+distinguishable from zero. Confirming it would take ~32 years of data. Confirming a
+3 pp edge would take ~154.
+
+That is a ceiling set by how few positions a small account can hold, not by how much
+history we can download. **No backtest this project runs will ever establish an edge.**
+Ten years of one market is not evidence; at n=8 positions it is noise with a mean.
+
+Meanwhile the advantages a small investor actually has were going unused, and four of
+the five are not signals at all:
+
+| Advantage | Usable in code |
+|---|---|
+| **Capacity** — a large fund cannot meaningfully own a small company; that pond is left alone | Yes, as a universe |
+| **No career risk** — nobody fires you for a bad two years, so you can hold through −50% | No — discipline |
+| **No redemption pressure** — you never have to sell to fund someone else's exit | Partly |
+| **Concentration allowed** — diversification rules cap funds at a few percent per name | Partly |
+| **Domain knowledge** — you understand Turkish companies better than a foreign analyst | No — human |
+
+And the old rule made the intended outcome impossible anyway: quarterly momentum rotation
+would have sold NVDA in early 2019 (after −56%) and again in early 2023 (after −66%). It
+exits exactly the drawdowns a position must survive to become large.
+
+**So the system stopped trying to pick, and started trying to make those advantages
+usable:** record the thesis, check its falsifiers mechanically, enforce sizing, slow the
+trading down. Signal contribution is small and unprovable; behaviour is large and
+controllable. See SPEC §0 for the full reasoning and §6b for the gate that replaced
+"beat buy-and-hold".
 
 ## Setup
 
