@@ -59,6 +59,26 @@ _SCHEMA = {
 }
 
 
+_DRAFT_SYSTEM = """You help an investor write down their own reasoning. You are \
+an editor, not an analyst.
+
+Given a rough, unstructured note about why they want to own a company, return a \
+tightened one- or two-sentence version of the SAME reasoning.
+
+Rules, in order of importance:
+1. Never add a claim they did not make. If they did not mention margins, you do \
+not mention margins.
+2. Never add a number, a price, a target, a date or a statistic. Not one.
+3. Never state an opinion about whether this is a good investment. That is not \
+your judgement to have.
+4. If their note is too vague to tighten — "seems good", "I like it" — say so \
+plainly instead of inventing substance. A thesis they did not actually think is \
+worse than no thesis, because it will read convincingly back to them later.
+5. Keep their voice. This has to sound like something they would defend.
+
+Return only the tightened sentence, or the words NEEDS MORE if rule 4 applies."""
+
+
 class ClaudeNarrator:
     def __init__(self, settings: Settings) -> None:
         if not settings.anthropic_api_key:
@@ -151,6 +171,48 @@ class ClaudeNarrator:
             out.append(_with_rationale(r, prose) if prose else r)
         return out, None
 
+
+    def draft_summary(self, raw: str) -> tuple[str | None, str | None]:
+        """Tighten a rough note into a thesis summary. Returns (summary, error).
+
+        The one place an LLM is genuinely useful in this design: the owner
+        supplies the reasoning, Claude supplies the sentence. The quant/LLM wall
+        (SPEC section 1) holds because nothing factual crosses it — no number, no
+        claim, no verdict.
+
+        Returns an error rather than filling a vague note with plausible
+        substance. A thesis the owner did not actually think is worse than none:
+        in six months it will read convincingly back to them and they will trust
+        it.
+        """
+        if len(raw.strip()) < 15:
+            return None, "too short to tighten — say a little more about why"
+
+        try:
+            resp = self._client.messages.create(
+                model=self._model,
+                max_tokens=500,
+                system=_DRAFT_SYSTEM,
+                output_config={"effort": "low"},
+                messages=[{"role": "user", "content": raw.strip()}],
+            )
+        except anthropic.APIStatusError as exc:
+            return None, f"API error {exc.status_code}: {exc.message}"
+        except anthropic.APIConnectionError as exc:
+            return None, f"could not reach the API: {exc}"
+
+        if resp.stop_reason == "refusal":
+            return None, "the model declined to answer"
+
+        try:
+            text = next((b.text for b in resp.content if b.type == "text"), "").strip()
+        except (AttributeError, TypeError) as exc:
+            return None, f"unreadable response: {exc}"
+
+        if not text or text.upper().startswith("NEEDS MORE"):
+            return None, ("too vague to be a thesis. What does the company do, and "
+                          "why is the market wrong about it?")
+        return text, None
 
 def _fail(reason: str) -> str:
     log.warning("Narration failed (%s); keeping deterministic notes.", reason)

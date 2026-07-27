@@ -113,6 +113,7 @@ class YahooProvider(MarketDataProvider):
             beta=_num(info.get("beta")),
             sector=info.get("sector"),
             held_pct_institutions=_num(info.get("heldPercentInstitutions")),
+            business_summary=info.get("longBusinessSummary"),
         )
 
     # ------------------------------- FX ---------------------------------

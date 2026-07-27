@@ -38,7 +38,7 @@ from telegram.ext import (
 
 from src.bot.markdown import escape_md
 from src.config import Settings
-from src.market.provider import MarketDataProvider
+from src.market.provider import MarketDataProvider, NewsProvider
 from src.models import Falsifier, FalsifierKind, Holding, Market, Thesis
 from src.portfolio.format import format_report
 from src.portfolio.guardrails import (
@@ -50,7 +50,14 @@ from src.portfolio.valuation import ValuationService
 from src.reasoning.narrator import ClaudeNarrator
 from src.signals.engine import SignalEngine
 from src.storage.db import Store
-from src.thesis.format import format_alert, format_thesis, format_weekly
+from src.thesis.brief import OPEN_QUESTIONS, build_brief
+from src.thesis.format import (
+    format_alert,
+    format_brief,
+    format_thesis,
+    format_weekly,
+)
+from src.thesis.suggest import suggest_falsifiers, suggested_command
 from src.thesis.monitor import ThesisMonitor, fired, unevaluated
 
 log = logging.getLogger(__name__)
@@ -68,11 +75,15 @@ class PortfolioBot:
         provider: MarketDataProvider,
         engine: SignalEngine | None = None,
         narrator: ClaudeNarrator | None = None,
+        news: NewsProvider | None = None,
     ) -> None:
         self._settings = settings
         self._store = store
         self._valuation = ValuationService(provider)
         self._monitor = ThesisMonitor(provider)
+        self._provider = provider
+        # Headlines are research material for /brief, never a signal input.
+        self._news = news
         # Optional and unused on the live path. The signal engine still exists
         # for the concluded experiments in scripts/research, but the bot no
         # longer asks it anything (SPEC section 0).
@@ -134,6 +145,8 @@ class PortfolioBot:
         )
         self._app.add_handler(CommandHandler("close", self._owner_only(self._close)))
         self._app.add_handler(CommandHandler("check", self._owner_only(self._check)))
+        self._app.add_handler(CommandHandler("brief", self._owner_only(self._brief)))
+        self._app.add_handler(CommandHandler("draft", self._owner_only(self._draft)))
         self._app.add_handler(CommandHandler("digest", self._owner_only(self._digest_now)))
         self._app.add_handler(CommandHandler("log", self._owner_only(self._log)))
         # /scan is deliberately absent. Producing ranked buy/sell calls is the
@@ -189,6 +202,9 @@ class PortfolioBot:
             "tells you when what you wrote comes true._\n\n"
             "*Positions*\n"
             "`/add US AAPL 10 185.50` · `/remove US AAPL` · `/holdings` · `/value`\n\n"
+            "*Research*\n"
+            "`/brief US ASTH` — everything knowable about a name, on one page\n"
+            "`/draft US ASTH 45 3 <rough thoughts>` — turns them into a ready line\n\n"
             "*Theses*\n"
             "`/thesis` — list them\n"
             "`/thesis NVDA` — one thesis and where each condition stands\n"
@@ -293,6 +309,95 @@ class PortfolioBot:
         # Fetching quotes is blocking I/O; run it off the event loop.
         report = await asyncio.to_thread(self._valuation.value, holdings)
         await msg.edit_text(format_report(report), parse_mode=ParseMode.MARKDOWN)
+
+    # ----------------------------- research -----------------------------
+
+    async def _brief(self, update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+        """/brief <US|BIST> <SYMBOL> — assemble everything knowable about a name.
+
+        The digging, done for you. The judgement is still yours, and the page
+        ends with the questions that make that explicit.
+        """
+        args = ctx.args or []
+        if len(args) < 2:
+            await update.effective_message.reply_text(
+                "Usage: `/brief <US|BIST> <SYMBOL>`", parse_mode=ParseMode.MARKDOWN)
+            return
+        market = _parse_market(args[0])
+        if market is None:
+            await update.effective_message.reply_text("Market must be US or BIST.")
+            return
+        symbol = args[1].upper()
+
+        note = await update.effective_message.reply_text(f"Reading {symbol}…")
+        brief = await asyncio.to_thread(
+            build_brief, symbol, market, self._provider, self._news
+        )
+        suggestions = await asyncio.to_thread(
+            suggest_falsifiers, symbol, market, self._provider
+        )
+        try:
+            await note.delete()
+        except Exception:  # noqa: BLE001 — cosmetic only
+            pass
+        await self._send_to_owner(
+            format_brief(brief, suggestions, OPEN_QUESTIONS)
+        )
+
+    async def _draft(self, update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+        """/draft <US|BIST> <SYMBOL> <PRICE> <1-5> <your rough thoughts>
+
+        Turns a messy note into a ready-to-send /thesis add line, with falsifiers
+        fitted to the name. Claude tightens the sentence; it never supplies the
+        reasoning, and if the note is too vague to tighten it says so rather than
+        inventing something that will read convincingly back to you later.
+        """
+        args = ctx.args or []
+        if len(args) < 5:
+            await update.effective_message.reply_text(
+                "Usage: `/draft <US|BIST> <SYMBOL> <PRICE> <1-5> <why, roughly>`\n\n"
+                "Write it however it comes out — the point is to get your actual "
+                "reasoning down, not to phrase it well.",
+                parse_mode=ParseMode.MARKDOWN,
+            )
+            return
+        market = _parse_market(args[0])
+        if market is None:
+            await update.effective_message.reply_text("Market must be US or BIST.")
+            return
+        try:
+            price, conviction = float(args[2]), int(args[3])
+        except ValueError:
+            await update.effective_message.reply_text(
+                "Price must be a number and conviction an integer 1-5.")
+            return
+
+        symbol, raw = args[1].upper(), " ".join(args[4:])
+        summary, error = raw, None
+        if self._narrator is not None:
+            summary, error = await asyncio.to_thread(
+                self._narrator.draft_summary, raw
+            )
+        if summary is None:
+            await update.effective_message.reply_text(f"⚠️ {error}")
+            return
+
+        suggestions = await asyncio.to_thread(
+            suggest_falsifiers, symbol, market, self._provider
+        )
+        command = suggested_command(symbol, market, price, conviction,
+                                    summary, suggestions)
+
+        lines = ["Here is the line — read it, change anything you disagree with, "
+                 "then send it back:", "", f"`{escape_md(command)}`", ""]
+        if suggestions:
+            lines.append("*Why these thresholds*")
+            for s in suggestions:
+                lines.append(f"· `{escape_md(s.spec)}` — {escape_md(s.basis)}")
+        if error:
+            lines += ["", escape_md(f"(Claude could not tighten the wording: "
+                                    f"{error}. Your own words are used instead.)")]
+        await self._send_to_owner("\n".join(lines))
 
     # ------------------------------ theses ------------------------------
 

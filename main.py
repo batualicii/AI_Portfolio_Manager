@@ -11,6 +11,8 @@ import logging
 import sys
 
 from src.bot.telegram_bot import PortfolioBot
+from src.market.news import FinnhubNews
+from src.market.provider import NullNewsProvider
 from src.config import ConfigError, Settings
 from src.market.yahoo import YahooProvider
 from src.reasoning.narrator import ClaudeNarrator
@@ -40,6 +42,15 @@ def main() -> int:
     log.info("Storage ready at %s", settings.db_path)
 
     provider = YahooProvider()
+    # Headlines feed /brief only. They were a signal input in the retired design;
+    # here they are something to read, which is a different job.
+    news = (
+        FinnhubNews(settings.finnhub_api_key)
+        if settings.finnhub_api_key
+        else NullNewsProvider()
+    )
+    if not settings.finnhub_api_key:
+        log.info("No Finnhub key — /brief will carry no headlines.")
 
     narrator = None
     if settings.anthropic_api_key:
@@ -48,7 +59,7 @@ def main() -> int:
     else:
         log.info("No Anthropic key — the bot still runs; only prose is affected.")
 
-    bot = PortfolioBot(settings, store, provider, narrator=narrator)
+    bot = PortfolioBot(settings, store, provider, narrator=narrator, news=news)
     log.info("Bot starting; weekly summary and daily falsifier check begin with "
              "the event loop.")
 

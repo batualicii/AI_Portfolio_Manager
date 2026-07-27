@@ -144,3 +144,69 @@ def format_weekly(
         parts += ["", format_review_prompt(due)]
 
     return "\n".join(parts)
+
+
+def format_brief(brief, suggestions, questions) -> str:
+    """A research page: facts, then the questions facts cannot settle."""
+    f, price = brief.fundamentals, brief.price
+    lines = [f"🔎 *{escape_md(brief.symbol)}* ({brief.market.value})", ""]
+
+    if f.business_summary:
+        text = f.business_summary.strip()
+        lines += [escape_md(text[:600] + ("…" if len(text) > 600 else "")), ""]
+
+    facts = []
+    if f.market_cap:
+        facts.append(f"cap {f.market_cap / 1e9:,.2f}B")
+    if f.revenue_growth is not None:
+        facts.append(f"revenue growth {f.revenue_growth * 100:.0f}%")
+    if f.profit_margin is not None:
+        facts.append(f"margin {f.profit_margin * 100:.0f}%")
+    if f.pe_ratio:
+        facts.append(f"P/E {f.pe_ratio:.0f}")
+    if f.held_pct_institutions is not None:
+        facts.append(f"institutions {f.held_pct_institutions * 100:.0f}%")
+    if facts:
+        lines += ["*Business*", escape_md(" · ".join(facts)), ""]
+
+    if price is not None:
+        bits = [f"{price.last:,.2f} now",
+                f"{price.off_high_pct:+.0f}% off its 52w high"]
+        if price.vs_200d_pct is not None:
+            bits.append(f"{price.vs_200d_pct:+.0f}% vs its 200-day average")
+        if price.momentum_12_1_pct is not None:
+            bits.append(f"{price.momentum_12_1_pct:+.0f}% over 12 months")
+        lines += ["*Price*", escape_md(" · ".join(bits))]
+        if price.worst_drawdown_pct is not None:
+            lines.append(escape_md(
+                f"Worst fall in this window: {price.worst_drawdown_pct:.0f}%. "
+                f"That is what owning it has felt like — assume you will see it again."
+            ))
+        lines.append("")
+
+    if brief.news:
+        lines += ["*Recent headlines*"]
+        for item in brief.news:
+            lines.append(f"· {escape_md(item.headline[:120])}")
+        lines.append("")
+
+    if brief.missing:
+        # Silence about a gap reads as "nothing to report", which is a different
+        # claim entirely — especially on BIST, where coverage is thin.
+        lines += ["*Not available*", escape_md(", ".join(brief.missing)), ""]
+
+    if suggestions:
+        lines += ["*Falsifiers fitted to this name*"]
+        for s in suggestions:
+            lines.append(f"· `{escape_md(s.spec)}` — {escape_md(s.basis)}")
+        lines.append("")
+
+    lines += ["*What the numbers cannot tell you*"]
+    for q in questions:
+        lines.append(f"❔ {escape_md(q)}")
+    lines += ["", escape_md(
+        "No score and no verdict here on purpose — this repo measured that a "
+        "ranking cannot be shown to work at this size. The advantage you have is "
+        "answering the questions above better than a stranger could."
+    )]
+    return "\n".join(lines)

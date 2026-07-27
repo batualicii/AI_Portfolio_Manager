@@ -53,6 +53,9 @@ class Fundamentals:
     # crowded into offers none of the capacity advantage that makes small-cap
     # investing worth doing at all (SPEC section 0).
     held_pct_institutions: float | None = None
+    # What the company says it does. Research needs it and no signal ever did,
+    # which is why it was not here before.
+    business_summary: str | None = None
 
 
 @dataclass(frozen=True)
