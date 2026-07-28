@@ -103,6 +103,18 @@ def test_a_sector_dropped_for_thin_coverage_says_so(tmp_path, monkeypatch):
     assert note and "5 usable names" in note
 
 
+def test_a_sector_the_universe_never_covered_is_not_silence(tmp_path, monkeypatch):
+    """Stats files built before `omitted` existed must still explain a blank."""
+    from src.models import Market
+    from src.thesis.interpret import peer_coverage
+
+    _write_stats(tmp_path, monkeypatch,
+                 {"market": "US", "sectors": {"Tech": {}}})
+
+    note = peer_coverage("Utilities", Market.US)
+    assert note and "Utilities" in note
+
+
 def test_missing_stats_file_is_reported_as_unbuilt_not_as_nothing_to_say(
         tmp_path, monkeypatch):
     from src.models import Market

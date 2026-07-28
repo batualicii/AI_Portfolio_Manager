@@ -146,6 +146,14 @@ def peer_coverage(sector: str | None, market: Market | None = None) -> str | Non
 
     if not sector:
         return "The data source did not report a sector, so there is no peer set."
+
+    if sector not in stats.get("sectors", {}):
+        # Reached by a sector dropped before `omitted` was recorded, and by one
+        # the universe simply does not contain. Either way the honest line is
+        # that nothing was measured, not silence.
+        return (f"No peer set for {sector} in this universe — it was either too "
+                f"thin to take a median from or not covered at all. Re-running "
+                f"`scripts.build_sector_stats` will say which.")
     return None
 
 
