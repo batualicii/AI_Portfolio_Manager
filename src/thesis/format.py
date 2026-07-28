@@ -17,7 +17,12 @@ from datetime import datetime
 from src.bot.markdown import escape_md
 from src.models import Thesis
 from src.portfolio.guardrails import Breach, TradePace
-from src.thesis.interpret import Check, Reading, checklist_line
+from src.thesis.interpret import (
+    WITHIN_SECTOR_ONLY,
+    Check,
+    Reading,
+    checklist_line,
+)
 from src.thesis.monitor import FalsifierCheck
 
 _MARK = {True: "🔴", False: "🟢"}
@@ -149,7 +154,8 @@ def format_weekly(
 
 def format_brief(brief, suggestions, questions,
                  readings: list[Reading] | None = None,
-                 checks: list[Check] | None = None) -> str:
+                 checks: list[Check] | None = None,
+                 coverage: str | None = None) -> str:
     """A research page: facts, then the questions facts cannot settle."""
     f, price = brief.fundamentals, brief.price
     lines = [f"🔎 *{escape_md(brief.symbol)}* ({brief.market.value})", ""]
@@ -178,6 +184,11 @@ def format_brief(brief, suggestions, questions,
             lines.append(f"· *{escape_md(r.label)}* {escape_md(r.display)} — "
                          f"{escape_md(r.meaning)}")
             lines.append(f"    _{escape_md(r.context)}_")
+        if any(r.peer_median is not None for r in readings):
+            lines += ["", escape_md(WITHIN_SECTOR_ONLY)]
+        elif coverage:
+            # A blank where a comparison belongs reads as "nothing notable".
+            lines += ["", escape_md(coverage)]
         lines.append("")
 
     if price is not None:

@@ -20,6 +20,17 @@ The checklist at the end counts conditions met. It is a **description of today**
 not a prediction: this repo measured that a composite score cannot be shown to
 predict anything at this portfolio size (SPEC section 6c), and a number between 0
 and 10 invites exactly the confidence that measurement denies.
+
+Two limits on the peer comparison are carried in the output rather than left for
+the reader to remember:
+
+  * **A median is only as good as its sample.** Financials has 114 usable names;
+    Utilities has 11. "Above the median" means very different things in those two
+    sentences, so every comparison states its `n`, and a thin one says so.
+  * **Comparisons are within a sector, never across one.** A 24% profit margin is
+    ordinary for a bank and remarkable for a retailer, because the two are not
+    measuring the same thing. These lines place a company against its peers; they
+    cannot rank sectors, and the page says so.
 """
 from __future__ import annotations
 
@@ -28,9 +39,21 @@ import pathlib
 from dataclasses import dataclass
 
 from src.market.types import Fundamentals
+from src.models import Market
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent.parent
 STATS = ROOT / "universes" / "sector_stats.json"
+
+# Above this an "above/below the median" statement is worth reading straight;
+# below it the median still beats nothing, but it moves if two names change.
+THIN_SAMPLE = 25
+
+WITHIN_SECTOR_ONLY = (
+    "Every comparison above is against this company's own sector and nothing "
+    "else. A 24% margin is ordinary for a bank and remarkable for a retailer, "
+    "so these lines place a company among its peers — they cannot rank one "
+    "sector against another."
+)
 
 
 MEANINGS = {
@@ -52,6 +75,12 @@ class Reading:
     meaning: str
     peer_median: float | None = None
     percentile: int | None = None
+    sample_size: int | None = None
+
+    @property
+    def thin(self) -> bool:
+        """True when the median rests on too few peers to lean on."""
+        return self.sample_size is not None and self.sample_size < THIN_SAMPLE
 
     @property
     def context(self) -> str:
@@ -63,6 +92,11 @@ class Reading:
         line = f"sector median {med} — this is {direction} it"
         if self.percentile is not None:
             line += f", higher than {self.percentile}% of its sector"
+        if self.sample_size is not None:
+            # Without n the reader cannot tell a median of 114 names from a
+            # median of 11, and both print the same confident sentence.
+            line += f" (n={self.sample_size}"
+            line += ", thin — read the direction loosely)" if self.thin else ")"
         return line
 
 
@@ -73,6 +107,46 @@ def _load_stats() -> dict:
         return json.loads(STATS.read_text())
     except (json.JSONDecodeError, OSError):
         return {}
+
+
+def peer_coverage(sector: str | None, market: Market | None = None) -> str | None:
+    """Why this name has no peer context, when it has none.
+
+    A blank where a comparison should be reads as "nothing notable", which is a
+    different claim from "we never measured this". BIST is the case that matters:
+    101 names across ~34 sectors is ~3 per sector, so no amount of re-running
+    produces a median. That is a property of the market's size, not a failed job,
+    and saying so stops the same question being asked every few months.
+    """
+    stats = _load_stats()
+    if not stats:
+        return ("Sector medians have not been built yet — "
+                "`python -m scripts.build_sector_stats` measures them.")
+
+    built_for = stats.get("market")
+    if market is not None and built_for and built_for != market.value:
+        if market is Market.BIST:
+            return (
+                "No sector medians for BIST. The index is ~100 names spread over "
+                "~34 sectors — about three each, where a median needs at least "
+                f"{stats.get('min_sample', 8)}. This is a limit of the market's "
+                "size, not a missing run, and the US medians are not a stand-in: "
+                "different economy, different cost of capital, different normal."
+            )
+        return (f"Sector medians here were measured on {built_for} names, so "
+                f"they are not a fair reference for a {market.value} company.")
+
+    if sector and sector in stats.get("omitted", {}):
+        counts = stats["omitted"][sector] or {}
+        worst = max(counts.values()) if counts else 0
+        return (f"{sector} had only {worst} usable names in this universe, under "
+                f"the {stats.get('min_sample', 8)} needed before a median says "
+                "anything. Its numbers are left uncompared rather than compared "
+                "badly.")
+
+    if not sector:
+        return "The data source did not report a sector, so there is no peer set."
+    return None
 
 
 def read_fundamentals(f: Fundamentals, sector: str | None = None) -> list[Reading]:
@@ -98,6 +172,7 @@ def read_fundamentals(f: Fundamentals, sector: str | None = None) -> list[Readin
             meaning=MEANINGS.get(field, ""),
             peer_median=median,
             percentile=percentile,
+            sample_size=peers.get("n") if median is not None else None,
         ))
     return out
 

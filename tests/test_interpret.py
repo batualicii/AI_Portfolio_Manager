@@ -44,6 +44,82 @@ def test_peer_context_names_the_median_and_the_direction(tmp_path, monkeypatch):
     assert reading.percentile == 66
 
 
+def _write_stats(tmp_path, monkeypatch, payload):
+    import json
+
+    from src.thesis import interpret
+
+    stats = tmp_path / "sector_stats.json"
+    stats.write_text(json.dumps(payload))
+    monkeypatch.setattr(interpret, "STATS", stats)
+    return stats
+
+
+def test_a_median_always_states_how_many_names_it_rests_on(tmp_path, monkeypatch):
+    """Financials (n=114) and Utilities (n=11) print the same sentence."""
+    _write_stats(tmp_path, monkeypatch, {"sectors": {
+        "Financials": {"pe_ratio": {"median": 12.0, "n": 114,
+                                    "values": [10.0, 12.0, 14.0]}},
+        "Utilities": {"pe_ratio": {"median": 20.0, "n": 11,
+                                   "values": [18.0, 20.0, 22.0]}},
+    }})
+
+    thick = read_fundamentals(Fundamentals(symbol="A", pe_ratio=24.0),
+                              "Financials")[0]
+    thin = read_fundamentals(Fundamentals(symbol="B", pe_ratio=24.0),
+                             "Utilities")[0]
+
+    assert "n=114" in thick.context and not thick.thin
+    assert "n=11" in thin.context and thin.thin
+    assert "thin" in thin.context, "a fragile median must not read as a firm one"
+
+
+def test_bist_is_told_why_it_structurally_has_no_peers(tmp_path, monkeypatch):
+    """~100 names over ~34 sectors is ~3 each — no re-run fixes that."""
+    from src.models import Market
+    from src.thesis.interpret import peer_coverage
+
+    _write_stats(tmp_path, monkeypatch,
+                 {"market": "US", "min_sample": 8, "sectors": {"Tech": {}}})
+
+    note = peer_coverage("Holding", Market.BIST)
+    assert note and "BIST" in note
+    assert "not a missing run" in note
+    assert "not a stand-in" in note, "US medians must not be offered as a proxy"
+
+    assert peer_coverage("Tech", Market.US) is None
+
+
+def test_a_sector_dropped_for_thin_coverage_says_so(tmp_path, monkeypatch):
+    from src.models import Market
+    from src.thesis.interpret import peer_coverage
+
+    _write_stats(tmp_path, monkeypatch, {
+        "market": "US", "min_sample": 8, "sectors": {"Tech": {}},
+        "omitted": {"Utilities": {"pe_ratio": 5, "beta": 4}},
+    })
+
+    note = peer_coverage("Utilities", Market.US)
+    assert note and "5 usable names" in note
+
+
+def test_missing_stats_file_is_reported_as_unbuilt_not_as_nothing_to_say(
+        tmp_path, monkeypatch):
+    from src.models import Market
+    from src.thesis import interpret
+
+    monkeypatch.setattr(interpret, "STATS", tmp_path / "absent.json")
+    note = interpret.peer_coverage("Tech", Market.US)
+    assert note and "build_sector_stats" in note
+
+
+def test_the_page_states_that_comparisons_never_cross_sectors():
+    """A bank's 24% margin and a retailer's are not the same measurement."""
+    from src.thesis.interpret import WITHIN_SECTOR_ONLY
+
+    assert "cannot rank one sector against another" in WITHIN_SECTOR_ONLY
+
+
 def test_the_checklist_marks_unanswerable_items_apart_from_failures():
     """Missing data is not a failed check — BIST coverage makes this common."""
     checks = quality_checklist(Fundamentals(symbol="X"))

@@ -62,6 +62,7 @@ from src.thesis.format import (
 )
 from src.thesis.interpret import (
     checklist_line,
+    peer_coverage,
     quality_checklist,
     read_fundamentals,
 )
@@ -350,10 +351,12 @@ class PortfolioBot:
             await note.delete()
         except Exception:  # noqa: BLE001 — cosmetic only
             pass
-        readings = read_fundamentals(brief.fundamentals, brief.fundamentals.sector)
+        sector = brief.fundamentals.sector
+        readings = read_fundamentals(brief.fundamentals, sector)
         checks = quality_checklist(brief.fundamentals, brief.price)
         await self._send_to_owner(
-            format_brief(brief, suggestions, OPEN_QUESTIONS, readings, checks)
+            format_brief(brief, suggestions, OPEN_QUESTIONS, readings, checks,
+                         peer_coverage(sector, market))
         )
 
     async def _audit(self, update: Update, _: ContextTypes.DEFAULT_TYPE) -> None:

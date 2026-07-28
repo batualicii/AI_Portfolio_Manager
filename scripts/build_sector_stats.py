@@ -79,11 +79,16 @@ def main() -> int:
         seen += got
 
     out: dict[str, dict] = {}
-    thin: list[str] = []
+    omitted: dict[str, dict[str, int]] = {}
     for sector, fields in raw.items():
         entry: dict[str, dict] = {}
+        short: dict[str, int] = {}
         for field, values in fields.items():
             if len(values) < MIN_SAMPLE:
+                # Recorded, not discarded: /brief can then say "Utilities had 5
+                # usable names" instead of leaving a silent blank, which reads
+                # as "nothing to report".
+                short[field] = len(values)
                 continue
             trimmed = sorted(values)[1:-1] or values   # drop the two extremes
             entry[field] = {
@@ -94,7 +99,7 @@ def main() -> int:
         if entry:
             out[sector] = entry
         else:
-            thin.append(sector)
+            omitted[sector] = short
 
     OUT.write_text(json.dumps({
         "built_at": dt.date.today().isoformat(),
@@ -104,14 +109,25 @@ def main() -> int:
         "note": ("Medians of a company's own sector peers, so a metric can be "
                  "read against something real instead of a rule of thumb. "
                  "Sectors with fewer than min_sample usable values are omitted "
-                 "rather than reported thin — a median of four is a rumour."),
+                 "rather than reported thin — a median of four is a rumour. "
+                 "Valid within a sector only: a bank's margin and a retailer's "
+                 "margin do not measure the same thing, so these medians rank "
+                 "companies among peers and never one sector against another."),
         "sectors": out,
+        "omitted": omitted,
     }, indent=1, ensure_ascii=False))
 
     print(f"\n  {seen} names had usable fundamentals")
     print(f"  {len(out)} sectors have enough data to quote a median")
+    thin = [s for s, e in out.items()
+            if any(f["n"] < 25 for f in e.values())]
     if thin:
-        print(f"  {len(thin)} omitted for thin coverage: {', '.join(thin[:6])}")
+        print(f"  {len(thin)} have medians under n=25 — /brief prints the "
+              f"sample size so they read as the weaker evidence they are: "
+              f"{', '.join(sorted(thin)[:6])}")
+    if omitted:
+        print(f"  {len(omitted)} omitted for thin coverage: "
+              f"{', '.join(sorted(omitted)[:6])}")
     print(f"\n  wrote {OUT.relative_to(ROOT)}")
     print("  /brief will now place each number against its sector.")
     return 0

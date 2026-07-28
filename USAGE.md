@@ -110,6 +110,22 @@ One page: what the company does, growth and margin, where the price sits against
 its own history, recent headlines, and **the worst fall it has actually put its
 owners through** — the number worth knowing before you buy, not after.
 
+Each number comes with what it measures and where it sits against its own
+sector's median. Two things about those comparison lines are worth knowing:
+
+- **They state their sample size.** `sector median 12 (n=114)` and
+  `sector median 20 (n=11, thin)` are not equally strong claims, and a median
+  built on eleven names moves if two of them change. The page marks the thin
+  ones rather than letting them read as firm.
+- **They never cross sectors.** A 24% profit margin is ordinary for a bank and
+  remarkable for a retailer, because the two are not measuring the same thing.
+  These lines rank a company among its peers and nothing else.
+
+**BIST names get no peer context, and cannot.** A hundred names spread over
+~34 sectors is about three each — there is no sample to take a median from. The
+page says so where the comparison would have been; it is a limit of the market's
+size, not a run that failed, and the US medians are not offered as a substitute.
+
 Anything the data source could not supply is listed explicitly. A silent gap
 reads as "nothing to report", which is a different claim.
 
