@@ -60,7 +60,12 @@ These are the ponds the screen fishes in. Run once, refresh every few months:
 ```bash
 python -m scripts.build_smallcap_universe   # S&P 600 — ~600 US small caps
 python -m scripts.build_bist_universe       # BIST 100 — ~100 Turkish names
+python -m scripts.build_sector_stats        # what "normal" looks like per sector
 ```
+
+The third one is slow (one call per name) and makes the difference between
+`/brief` printing "P/E 24" and printing "P/E 24, the median in its sector is 18".
+Re-run it a few times a year.
 
 ## 5. Run
 
@@ -153,12 +158,30 @@ does in an ordinary bad stretch. A falsifier that fires during normal weakness i
 a stop-loss, and the exit-rule research here measured what stop-losses do to a
 long hold.
 
+### Auditing what you already own
+
+```
+/audit
+```
+
+If your positions came from somewhere else — an older system, your own
+research — they have no theses attached, so nothing can be monitored and nothing
+will alert you.
+
+`/audit` lists every holding with its weight, its ceiling, what the data says,
+and whether a thesis exists. It asks one question per position: **would you buy
+this today, at this weight, knowing what you know now?**
+
+That matters because "should I sell everything?" cannot be answered, and this
+can. A position you cannot write a thesis for has already answered it.
+
 ### Living with it
 
 | Command | What it does |
 |---|---|
 | `/thesis` | list your open theses |
 | `/thesis ASTH` | one thesis, with every condition's current state |
+| `/audit` | every holding, with the question that decides it |
 | `/check` | run every condition now |
 | `/review` | which theses are due, and their human-only questions |
 | `/reviewed ASTH note` | timestamp a review you actually did |

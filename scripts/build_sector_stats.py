@@ -1,0 +1,121 @@
+"""Measure what normal looks like, per sector, so a number can be read.
+
+"P/E 24" means nothing on its own. "P/E 24, the median in its sector is 18"
+means something a reader can act on. The difference is a reference point, and
+the honest reference point is what the company's own peers actually do — not a
+rule of thumb about what is expensive.
+
+This walks a universe once, records growth, margin, P/E and beta per sector, and
+writes the medians and full distributions. Slow (one fundamentals call per name)
+and worth re-running a few times a year, not daily.
+
+Coverage is reported rather than assumed: a sector with four usable names has a
+median that should not be quoted, and the output says which ones those are.
+
+Usage:
+    python -m scripts.build_sector_stats            # S&P 600
+    python -m scripts.build_sector_stats --universe universes/bist.json
+"""
+from __future__ import annotations
+
+import argparse
+import datetime as dt
+import json
+import logging
+import pathlib
+import statistics
+
+from src.market.yahoo import YahooProvider
+from src.models import Market
+
+ROOT = pathlib.Path(__file__).resolve().parent.parent
+OUT = ROOT / "universes" / "sector_stats.json"
+DEFAULT = ROOT / "universes" / "sp600.json"
+
+FIELDS = ("revenue_growth", "profit_margin", "pe_ratio", "beta")
+MIN_SAMPLE = 8   # below this a median is a rumour, not a statistic
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--universe", type=pathlib.Path, default=DEFAULT)
+    parser.add_argument("--market", default="US", choices=["US", "BIST"])
+    args = parser.parse_args()
+
+    if not args.universe.exists():
+        print(f"missing {args.universe} — build a universe first")
+        return 1
+
+    logging.basicConfig(level=logging.WARNING)
+    data = json.loads(args.universe.read_text())
+    symbols, sectors = data["symbols"], data.get("sectors", {})
+    market = Market(args.market)
+    provider = YahooProvider()
+
+    print(f"reading fundamentals for {len(symbols)} names "
+          f"(slow — one call each)...", flush=True)
+
+    raw: dict[str, dict[str, list[float]]] = {}
+    seen = 0
+    for i, symbol in enumerate(symbols, 1):
+        if i % 50 == 0:
+            print(f"  ...{i}/{len(symbols)}", flush=True)
+        sector = sectors.get(symbol)
+        if not sector:
+            continue
+        try:
+            f = provider.get_fundamentals(symbol, market)
+        except Exception:  # noqa: BLE001
+            continue
+        bucket = raw.setdefault(sector, {k: [] for k in FIELDS})
+        got = False
+        for field in FIELDS:
+            value = getattr(f, field, None)
+            # P/E is meaningless when negative and distorts a median badly.
+            if value is None or (field == "pe_ratio" and value <= 0):
+                continue
+            bucket[field].append(float(value))
+            got = True
+        seen += got
+
+    out: dict[str, dict] = {}
+    thin: list[str] = []
+    for sector, fields in raw.items():
+        entry: dict[str, dict] = {}
+        for field, values in fields.items():
+            if len(values) < MIN_SAMPLE:
+                continue
+            trimmed = sorted(values)[1:-1] or values   # drop the two extremes
+            entry[field] = {
+                "median": statistics.median(trimmed),
+                "n": len(trimmed),
+                "values": [round(v, 4) for v in trimmed],
+            }
+        if entry:
+            out[sector] = entry
+        else:
+            thin.append(sector)
+
+    OUT.write_text(json.dumps({
+        "built_at": dt.date.today().isoformat(),
+        "universe": str(args.universe.name),
+        "market": market.value,
+        "min_sample": MIN_SAMPLE,
+        "note": ("Medians of a company's own sector peers, so a metric can be "
+                 "read against something real instead of a rule of thumb. "
+                 "Sectors with fewer than min_sample usable values are omitted "
+                 "rather than reported thin — a median of four is a rumour."),
+        "sectors": out,
+    }, indent=1, ensure_ascii=False))
+
+    print(f"\n  {seen} names had usable fundamentals")
+    print(f"  {len(out)} sectors have enough data to quote a median")
+    if thin:
+        print(f"  {len(thin)} omitted for thin coverage: {', '.join(thin[:6])}")
+    print(f"\n  wrote {OUT.relative_to(ROOT)}")
+    print("  /brief will now place each number against its sector.")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

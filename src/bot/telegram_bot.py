@@ -42,7 +42,9 @@ from src.market.provider import MarketDataProvider, NewsProvider
 from src.models import Falsifier, FalsifierKind, Holding, Market, Thesis
 from src.portfolio.format import format_report
 from src.portfolio.guardrails import (
+    CONVICTION_CEILING,
     concentration_breaches,
+    max_weight_for,
     sale_without_cause,
     trade_pace,
 )
@@ -53,9 +55,15 @@ from src.storage.db import Store
 from src.thesis.brief import OPEN_QUESTIONS, build_brief
 from src.thesis.format import (
     format_alert,
+    format_audit,
     format_brief,
     format_thesis,
     format_weekly,
+)
+from src.thesis.interpret import (
+    checklist_line,
+    quality_checklist,
+    read_fundamentals,
 )
 from src.thesis.suggest import suggest_falsifiers, suggested_command
 from src.thesis.monitor import ThesisMonitor, fired, unevaluated
@@ -146,6 +154,7 @@ class PortfolioBot:
         self._app.add_handler(CommandHandler("close", self._owner_only(self._close)))
         self._app.add_handler(CommandHandler("check", self._owner_only(self._check)))
         self._app.add_handler(CommandHandler("brief", self._owner_only(self._brief)))
+        self._app.add_handler(CommandHandler("audit", self._owner_only(self._audit)))
         self._app.add_handler(CommandHandler("draft", self._owner_only(self._draft)))
         self._app.add_handler(CommandHandler("digest", self._owner_only(self._digest_now)))
         self._app.add_handler(CommandHandler("log", self._owner_only(self._log)))
@@ -204,6 +213,7 @@ class PortfolioBot:
             "`/add US AAPL 10 185.50` · `/remove US AAPL` · `/holdings` · `/value`\n\n"
             "*Research*\n"
             "`/brief US ASTH` — everything knowable about a name, on one page\n"
+            "`/audit` — every position you hold, and the question that decides it\n"
             "`/draft US ASTH 45 3 <rough thoughts>` — turns them into a ready line\n\n"
             "*Theses*\n"
             "`/thesis` — list them\n"
@@ -340,9 +350,78 @@ class PortfolioBot:
             await note.delete()
         except Exception:  # noqa: BLE001 — cosmetic only
             pass
+        readings = read_fundamentals(brief.fundamentals, brief.fundamentals.sector)
+        checks = quality_checklist(brief.fundamentals, brief.price)
         await self._send_to_owner(
-            format_brief(brief, suggestions, OPEN_QUESTIONS)
+            format_brief(brief, suggestions, OPEN_QUESTIONS, readings, checks)
         )
+
+    async def _audit(self, update: Update, _: ContextTypes.DEFAULT_TYPE) -> None:
+        """/audit — every position you hold, with the question that decides it.
+
+        Built for the moment a portfolio arrives from somewhere else with no
+        theses attached: rather than asking the unanswerable "should I sell
+        everything", it asks the answerable one once per position.
+        """
+        holdings = self._store.list_holdings()
+        if not holdings:
+            await update.effective_message.reply_text(
+                "No positions recorded. `/add US AAPL 10 185.50` first.",
+                parse_mode=ParseMode.MARKDOWN)
+            return
+
+        note = await update.effective_message.reply_text(
+            f"Reading {len(holdings)} positions…")
+        rows = await asyncio.to_thread(self._audit_rows, holdings)
+        try:
+            await note.delete()
+        except Exception:  # noqa: BLE001 — cosmetic only
+            pass
+        await self._send_to_owner(format_audit(rows))
+
+    def _audit_rows(self, holdings) -> list[dict]:
+        """Blocking: prices, fundamentals and weights for every holding."""
+        report = self._valuation.value(holdings)
+        rate = report.usdtry or 1.0
+        values, total = {}, 0.0
+        for p in report.positions:
+            mv = p.market_value
+            if mv is None:
+                continue
+            in_try = mv * rate if p.holding.market is Market.US else mv
+            values[(p.holding.symbol.upper(), p.holding.market)] = in_try
+            total += in_try
+
+        rows = []
+        for holding in holdings:
+            key = (holding.symbol.upper(), holding.market)
+            weight = values.get(key, 0.0) / total if total else 0.0
+            thesis = self._store.get_thesis(holding.symbol, holding.market)
+            brief = build_brief(holding.symbol, holding.market, self._provider,
+                               news=None)
+            checks = quality_checklist(brief.fundamentals, brief.price)
+
+            facts = []
+            if brief.price is not None:
+                facts.append(f"{brief.price.off_high_pct:+.0f}% off its 52w high")
+                if brief.price.vs_200d_pct is not None:
+                    facts.append(f"{brief.price.vs_200d_pct:+.0f}% vs 200-day")
+            if brief.fundamentals.revenue_growth is not None:
+                facts.append(
+                    f"growth {brief.fundamentals.revenue_growth * 100:.0f}%")
+
+            rows.append({
+                "symbol": holding.symbol.upper(),
+                "market": holding.market.value,
+                "weight": weight,
+                "ceiling": (max_weight_for(thesis.conviction) if thesis
+                            else CONVICTION_CEILING[3]),
+                "thesis": thesis.summary if thesis else None,
+                "facts": " · ".join(facts),
+                "checks": checklist_line(checks),
+            })
+        rows.sort(key=lambda r: r["weight"], reverse=True)
+        return rows
 
     async def _draft(self, update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         """/draft <US|BIST> <SYMBOL> <PRICE> <1-5> <your rough thoughts>

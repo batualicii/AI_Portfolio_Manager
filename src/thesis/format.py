@@ -17,6 +17,7 @@ from datetime import datetime
 from src.bot.markdown import escape_md
 from src.models import Thesis
 from src.portfolio.guardrails import Breach, TradePace
+from src.thesis.interpret import Check, Reading, checklist_line
 from src.thesis.monitor import FalsifierCheck
 
 _MARK = {True: "🔴", False: "🟢"}
@@ -146,7 +147,9 @@ def format_weekly(
     return "\n".join(parts)
 
 
-def format_brief(brief, suggestions, questions) -> str:
+def format_brief(brief, suggestions, questions,
+                 readings: list[Reading] | None = None,
+                 checks: list[Check] | None = None) -> str:
     """A research page: facts, then the questions facts cannot settle."""
     f, price = brief.fundamentals, brief.price
     lines = [f"🔎 *{escape_md(brief.symbol)}* ({brief.market.value})", ""]
@@ -168,6 +171,14 @@ def format_brief(brief, suggestions, questions) -> str:
         facts.append(f"institutions {f.held_pct_institutions * 100:.0f}%")
     if facts:
         lines += ["*Business*", escape_md(" · ".join(facts)), ""]
+
+    if readings:
+        lines += ["*What those numbers mean*"]
+        for r in readings:
+            lines.append(f"· *{escape_md(r.label)}* {escape_md(r.display)} — "
+                         f"{escape_md(r.meaning)}")
+            lines.append(f"    _{escape_md(r.context)}_")
+        lines.append("")
 
     if price is not None:
         bits = [f"{price.last:,.2f} now",
@@ -201,6 +212,18 @@ def format_brief(brief, suggestions, questions) -> str:
             lines.append(f"· `{escape_md(s.spec)}` — {escape_md(s.basis)}")
         lines.append("")
 
+    if checks:
+        lines += [f"*Checklist — {escape_md(checklist_line(checks))}*"]
+        for c in checks:
+            mark = "⚪" if c.passed is None else ("✅" if c.passed else "❌")
+            lines.append(f"{mark} {escape_md(c.name)} — {escape_md(c.detail)}")
+        lines += ["", escape_md(
+            "This counts conditions met today. It is not a rating and predicts "
+            "nothing — a composite score cannot be shown to work at this "
+            "portfolio size, so this stays a list of facts rather than becoming "
+            "a number you would trust more than it deserves."
+        ), ""]
+
     lines += ["*What the numbers cannot tell you*"]
     for q in questions:
         lines.append(f"❔ {escape_md(q)}")
@@ -209,4 +232,44 @@ def format_brief(brief, suggestions, questions) -> str:
         "ranking cannot be shown to work at this size. The advantage you have is "
         "answering the questions above better than a stranger could."
     )]
+    return "\n".join(lines)
+
+
+def format_audit(rows) -> str:
+    """Every position, with the one question that decides it.
+
+    "Should I sell everything?" cannot be answered. "Would I buy this, today, at
+    this weight?" can be answered once per position, and a position you cannot
+    write a thesis for has already answered it.
+    """
+    lines = ["🧾 *Position audit*", "",
+             escape_md("For each one: would you buy it today, at this weight, "
+                       "knowing what you know now? A position you cannot write a "
+                       "thesis for has answered that already."), ""]
+
+    for row in rows:
+        head = (f"*{escape_md(row['symbol'])}* ({row['market']}) · "
+                f"{row['weight'] * 100:.1f}% of the book")
+        if row.get("ceiling") and row["weight"] > row["ceiling"]:
+            head += f" · over its {row['ceiling'] * 100:.0f}% ceiling"
+        lines.append(head)
+
+        if row.get("thesis"):
+            lines.append(f"    _{escape_md(row['thesis'][:120])}_")
+        else:
+            lines.append(escape_md("    ⚠️ no thesis on record — nothing can be "
+                                   "monitored, and nothing will alert you"))
+
+        if row.get("facts"):
+            lines.append(f"    {escape_md(row['facts'])}")
+        if row.get("checks"):
+            lines.append(f"    {escape_md(row['checks'])}")
+        lines.append("")
+
+    lines.append(escape_md(
+        "Write a thesis for the ones you would buy again: /draft <MARKET> "
+        "<SYMBOL> <price> <1-5> <why>. For the rest, the honest move is to say "
+        "so out loud — /close records the reason, and that record is what makes "
+        "the next decision better than this one."
+    ))
     return "\n".join(lines)
