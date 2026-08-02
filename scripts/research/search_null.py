@@ -116,18 +116,23 @@ NAMES = tuple(SIGNALS)
 
 
 def build_panel(period: str = "max") -> None:
-    """Fetch once, compute every signal, cache. Slow; run with --build."""
+    """Fetch once, compute every signal, cache. Slow; run with --build.
+
+    Membership is read per year from `by_year`, not flattened. The first
+    version of this function pulled `dropped_names` alone — 236 companies that
+    *left* the index — and searched that, which is the failure sample rather
+    than the universe. Reading the yearly lists both fixes that and makes the
+    membership mask below possible.
+    """
     data = json.loads(PIT.read_text())
-    symbols = sorted(set(data["current_count"] if isinstance(data["current_count"], list)
-                         else []) | set(data.get("symbols", []))
-                     | set(data.get("dropped_names", [])))
-    if not symbols:
-        # The PIT file stores counts plus lists under varying keys across
-        # builds; fall back to whatever list-shaped values it holds.
-        symbols = sorted({s for v in data.values() if isinstance(v, list) for s in v
-                          if isinstance(s, str) and s.isupper() and len(s) <= 5})
-    log.warning("Universe: %d symbols (point-in-time, includes dropped names)",
-                len(symbols))
+    by_year = {int(y): set(v) for y, v in data["by_year"].items()}
+    if not by_year:
+        raise SystemExit("sp500_pit.json has no by_year membership; rebuild it")
+    symbols = sorted({s for members in by_year.values() for s in members})
+    log.warning("Universe: %d distinct symbols across %d years (%d–%d), "
+                "~%d members per year",
+                len(symbols), len(by_year), min(by_year), max(by_year),
+                sum(len(v) for v in by_year.values()) // len(by_year))
 
     provider = YahooProvider()
     closes: dict[str, pd.Series] = {}
@@ -153,22 +158,40 @@ def build_panel(period: str = "max") -> None:
              if (panel.index <= m).any()]
     dates = [d for d in dates if (panel.index < d).sum() >= 260]
 
+    # Point-in-time membership. Without this the search can buy a company in
+    # 2016 that only entered the index in 2023 — selected, in effect, for having
+    # gone on to succeed. That is the single largest bias available here, and
+    # this repo has already measured it at 36.4 pp/yr.
+    columns = list(panel.columns)
+    eligible = np.zeros((len(dates), len(columns)), dtype=bool)
+    years = sorted(by_year)
+    for t, day in enumerate(dates):
+        year = min(max(day.year, years[0]), years[-1])
+        members = by_year[year]
+        eligible[t] = np.array([s in members for s in columns])
+
     scores = np.full((len(NAMES), len(dates), panel.shape[1]), np.nan)
     for k, name in enumerate(NAMES):
         series = SIGNALS[name](panel)
         for t, day in enumerate(dates):
-            scores[k, t] = series.loc[day].to_numpy()
+            row = series.loc[day].to_numpy(dtype=float)
+            scores[k, t] = np.where(eligible[t], row, np.nan)
 
     # Forward return to the next rebalance, which is what selection is judged on.
     forward = np.full((len(dates), panel.shape[1]), np.nan)
     for t in range(len(dates) - 1):
         a, b = panel.loc[dates[t]].to_numpy(), panel.loc[dates[t + 1]].to_numpy()
         with np.errstate(invalid="ignore", divide="ignore"):
-            forward[t] = b / a - 1.0
+            step = b / a - 1.0
+        # A name that left the index still has a price, and its return still
+        # counts for anyone holding it — but only members are selectable, so the
+        # benchmark must be the members too, or real and null would be measured
+        # against different universes.
+        forward[t] = np.where(eligible[t], step, np.nan)
 
     CACHE.parent.mkdir(parents=True, exist_ok=True)
     np.savez_compressed(
-        CACHE, scores=scores, forward=forward,
+        CACHE, scores=scores, forward=forward, eligible=eligible,
         symbols=np.array(panel.columns), dates=np.array([str(d.date()) for d in dates]),
         signal_names=np.array(NAMES),
     )
@@ -226,17 +249,22 @@ def evaluate(picks: np.ndarray, forward: np.ndarray) -> np.ndarray:
     """
     m, t, _ = picks.shape
     valid = ~np.isnan(forward)
-    bench = np.array([np.nanmean(forward[i][valid[i]]) if valid[i].any() else np.nan
+    bench = np.array([forward[i][valid[i]].mean() if valid[i].any() else np.nan
                       for i in range(t)])
 
     out = np.empty(m)
     for i in range(m):
         taken = np.take_along_axis(forward[None, :, :], picks[i][None], axis=-1)[0]
-        port = np.nanmean(taken, axis=-1)
+        # A basket can come out entirely unpriceable on a thin date. nanmean
+        # would warn and return NaN; counting the names first says the same
+        # thing without pretending an empty average happened.
+        filled = np.where(np.isnan(taken), 0.0, taken).sum(axis=-1)
+        held = (~np.isnan(taken)).sum(axis=-1)
+        port = np.where(held > 0, filled / np.maximum(held, 1), np.nan)
         excess = port - bench
         good = ~np.isnan(excess)
         # Quarterly rebalance, so four periods a year.
-        out[i] = np.nanmean(excess[good]) * 4 if good.any() else np.nan
+        out[i] = excess[good].mean() * 4 if good.any() else np.nan
     return out
 
 
@@ -320,13 +348,24 @@ def main() -> int:
         world = np.array([evaluate(p, shuffled) for p in picks_by_top])
         null_best[w] = np.nanmax(world)
 
+    beaten = int((null_best >= best_value).sum())
     pct = float((null_best < best_value).mean() * 100)
+    null_median = float(np.median(null_best))
     p95, p99 = np.percentile(null_best, [95, 99])
-    print(f"\n  best-from-nothing, median     : {np.median(null_best) * 100:+.2f} pp/yr")
+    # The percentile is itself an estimate from a finite number of worlds. Its
+    # Monte Carlo error is binomial: with `beaten` worlds above the winner, the
+    # count carries a standard error of about sqrt(beaten).
+    pct_se = (max(beaten, 1) ** 0.5) / args.worlds * 100
+    print(f"\n  best-from-nothing, median     : {null_median * 100:+.2f} pp/yr")
     print(f"  best-from-nothing, 95th pct   : {p95 * 100:+.2f} pp/yr")
     print(f"  best-from-nothing, 99th pct   : {p99 * 100:+.2f} pp/yr")
     print(f"  our winner                    : {best_value * 100:+.2f} pp/yr")
-    print(f"  its percentile in the null    : {pct:.1f}")
+    print(f"  its percentile in the null    : {pct:.1f} ± {pct_se:.1f}  "
+          f"({beaten}/{args.worlds} null worlds matched or beat it)")
+    print("\n  That ± is the noise in the percentile from using a finite number "
+          "of\n  worlds, not the noise in the finding. The permutation draw itself "
+          "is\n  fixed by --seed; re-run with a different one for an independent "
+          "cloud.")
 
     print(f"\n{'-' * 78}")
     if best_value <= p95:
@@ -350,13 +389,31 @@ def main() -> int:
 
     # ------------------------------------------------------------- holdout
     holdout, _ = run(split, len(dates))
+    held = holdout[best_top_i, best_w]
     print(f"\n{'=' * 78}\nHOLDOUT — frozen winner on {dates[split]} .. {dates[-1]}, "
           f"never searched\n{'=' * 78}")
-    print(f"  train   {best_value * 100:+.2f} pp/yr")
-    print(f"  holdout {holdout[best_top_i, best_w] * 100:+.2f} pp/yr")
-    print("\n  A large gap between these two is the signature of a fitted result,\n"
-          "  and it is the normal outcome. One holdout number is itself noisy —\n"
-          "  it is a check on the search, not a second measurement of the edge.")
+    print(f"  train                         {best_value * 100:+.2f} pp/yr")
+    print(f"  holdout                       {held * 100:+.2f} pp/yr")
+    print(f"  what noise typically yields   {null_median * 100:+.2f} pp/yr "
+          f"(median best-from-nothing)")
+
+    # The comparison that decides it, printed rather than left for the reader to
+    # make by putting two tables side by side.
+    if held < null_median:
+        print("\n  The frozen winner, on data it never saw, came in BELOW what this\n"
+              "  same search typically extracts from pure noise. Whatever the\n"
+              "  training number looked like, there is nothing here to act on.\n"
+              "  Read this line before the percentile above: a suggestive null\n"
+              "  percentile and a holdout under the null median together mean the\n"
+              "  search fitted the training window.")
+    elif held < best_value * 0.5:
+        print("\n  Less than half the training figure survived. That decay is the\n"
+              "  signature of a fitted result and is the normal outcome.")
+    else:
+        print("\n  The holdout kept most of the training figure. Rare, and still one\n"
+              "  noisy number — a check on the search, not a second measurement.")
+    print("\n  Either way the holdout is now spent. Tuning anything after seeing\n"
+          "  it converts the last independent evidence into more training data.")
 
     # --------------------------------------------------- what it would take
     print(f"\n{'=' * 78}\nWHAT ANY OF THIS WOULD TAKE TO CONFIRM LIVE\n{'=' * 78}")

@@ -120,3 +120,52 @@ def test_every_signal_in_the_library_has_a_published_basis(sn):
     for citation in ("Jegadeesh", "Frazzini", "George & Hwang",
                      "McLean & Pontiff", "Hou, Xue & Zhang", "Harvey"):
         assert citation in source, f"{citation} missing from the reasoning"
+
+
+def test_a_winner_that_loses_to_noise_out_of_sample_is_called_out(sn):
+    """The first run needed two tables put side by side to see this."""
+    import inspect
+
+    source = inspect.getsource(sn.main)
+    assert "held < null_median" in source
+    assert "BELOW what this" in source
+
+
+def test_the_percentile_reports_its_own_monte_carlo_error(sn):
+    """98.4 from 1000 worlds is 16 counts, so it carries about ±0.4."""
+    import inspect
+
+    source = inspect.getsource(sn.main)
+    assert "pct_se" in source and "null worlds matched or beat it" in source
+
+
+def test_the_universe_is_index_membership_not_the_dropped_list(sn):
+    """The first run searched the 236 names that LEFT the index — the failures."""
+    import inspect
+
+    source = inspect.getsource(sn.build_panel)
+    assert "by_year" in source
+    assert "dropped_names" not in source.split('"""')[2], \
+        "dropped_names must not be a symbol source again"
+
+
+def test_selection_is_restricted_to_members_on_the_day(sn):
+    """Buying a 2016 name that only joined in 2023 selects for having succeeded."""
+    import inspect
+
+    source = inspect.getsource(sn.build_panel)
+    assert "eligible" in source
+    assert "np.where(eligible[t], row, np.nan)" in source
+
+
+def test_an_empty_basket_does_not_become_a_silent_nan_average(sn):
+    """nanmean of an empty slice warns and returns NaN; counting says so plainly."""
+    import numpy as np
+
+    forward = np.array([[np.nan, np.nan, np.nan], [0.10, 0.20, 0.30]])
+    picks = np.array([[[0, 1], [0, 1]]])          # one combination, two dates
+    out = sn.evaluate(picks, forward)
+
+    # Date 0 is unpriceable and contributes nothing; date 1 is +15% against a
+    # +20% benchmark, so the annualised excess is 4 x (-5pp).
+    assert np.isclose(out[0], (0.15 - 0.20) * 4)
