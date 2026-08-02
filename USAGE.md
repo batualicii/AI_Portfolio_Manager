@@ -232,8 +232,12 @@ sector's median. Two things about those comparison lines are worth knowing:
 
 - **They state their sample size.** `sector median 12 (n=114)` and
   `sector median 20 (n=11, thin)` are not equally strong claims, and a median
-  built on eleven names moves if two of them change. The page marks the thin
-  ones rather than letting them read as firm.
+  built on eleven names moves if two of them change. Anything under n=25 is
+  marked thin, in `/brief` and on the `/positions` and `/pool` cards alike —
+  and the card's tally says how many of its comparisons rest on one, so
+  `3/4 ahead, 2 on a thin sample` cannot read as `3/4 ahead`.
+  (`n` is counted after the two extreme values are trimmed, so it is two below
+  the sample the coverage gate saw. The smaller number is the honest one.)
 - **They never cross sectors.** A 24% profit margin is ordinary for a bank and
   remarkable for a retailer, because the two are not measuring the same thing.
   These lines rank a company among its peers and nothing else.
@@ -247,6 +251,16 @@ it. Still far better than nothing, which is what those lines showed before.
 
 US medians are never offered as a BIST substitute. Different economy, different
 cost of capital, different normal.
+
+**What BIST coverage actually looks like**, so you can read it with the right
+scepticism: of ~34 sectors, four clear the gate — Holding, Bankacılık,
+Kimya/İlaç/Petrol, Metal Eşya/Makine — and all four land at n=6–9. Every one of
+those comparisons is marked thin. The other thirty fall back to the market-wide
+level. ASTOR is in a covered sector; BIMAS and THYAO are not.
+
+Treat a thin BIST "ahead" as barely better than a coin flip. It is still worth
+printing — a weak reference beats an invented one — but it is not something to
+lean a position on.
 
 Anything the data source could not supply is listed explicitly. A silent gap
 reads as "nothing to report", which is a different claim.

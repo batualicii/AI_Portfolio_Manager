@@ -96,7 +96,11 @@ def main() -> int:
         trimmed = sorted(values)[1:-1] or values   # drop the two extremes
         return {
             "median": statistics.median(trimmed),
+            # What the median actually rests on, after trimming — two fewer than
+            # the sample the min_sample gate checked. Reporting the gate's number
+            # would overstate the evidence by exactly the two values discarded.
             "n": len(trimmed),
+            "n_raw": len(values),
             "values": [round(v, 4) for v in trimmed],
         }
 
@@ -138,7 +142,9 @@ def main() -> int:
                  "sector has no sample — BIST, almost entirely. It mixes "
                  "industries on purpose and is therefore a level to read "
                  "against, not a peer comparison; consumers must label it as "
-                 "such."),
+                 "such. `n` counts the values behind each median after the two "
+                 "extremes are trimmed, so it is two below the `n_raw` the "
+                 "min_sample gate saw — the smaller number is the honest one."),
         "sectors": out,
         "omitted": omitted,
         "overall": market_wide,

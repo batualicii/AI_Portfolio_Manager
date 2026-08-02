@@ -18,6 +18,13 @@ words.
 What a card is not: a rating. `3/4 ahead` counts how many metrics sit on the
 better side of a reference today. It is a tally of comparisons, not a forecast,
 and SPEC section 6c is why it never becomes a single number to sort on.
+
+Nor are all four comparisons equally solid. A sector median built from six names
+— which is every covered sector on BIST — moves if one company restates, and an
+"ahead" resting on it is close to a coin flip. Those references are marked thin
+in the line itself and counted separately in the tally, because the tally is the
+most confident-looking thing on the card and would otherwise be the least
+earned.
 """
 from __future__ import annotations
 
@@ -25,7 +32,7 @@ from dataclasses import dataclass, field
 
 from src.market.types import Fundamentals
 from src.models import Market
-from src.thesis.interpret import market_medians, sector_medians
+from src.thesis.interpret import THIN_SAMPLE, market_medians, sector_medians
 
 # The last resort, used only when neither a sector nor a market median exists —
 # an unbuilt stats file, or a metric nothing in the universe reported. Absolute
@@ -45,6 +52,7 @@ class Fact:
     display: str
     reference: str
     ahead: bool | None          # None = no reference, so no comparison was made
+    thin: bool = False          # the reference rests on too few names to lean on
 
     def render(self) -> str:
         return f"{self.label} {self.display} ({self.reference})"
@@ -77,6 +85,10 @@ class Card:
         return [f for f in self.facts if f.ahead is None]
 
     @property
+    def thin_facts(self) -> list[Fact]:
+        return [f for f in self.facts if f.thin]
+
+    @property
     def tally(self) -> str:
         rated = len(self.ahead) + len(self.behind)
         if not rated:
@@ -84,6 +96,11 @@ class Card:
         line = f"{len(self.ahead)}/{rated} ahead"
         if self.uncompared:
             line += f", {len(self.uncompared)} unmeasured"
+        if self.thin_facts:
+            # A tally that counted a six-name median the same as a hundred-name
+            # one would be the most confident-looking part of the card and the
+            # least earned. BIST is the case: four covered sectors, all n<10.
+            line += f", {len(self.thin_facts)} on a thin sample"
         return line
 
     @property
@@ -104,8 +121,10 @@ def _fact(label: str, value: float | None, median, n, *, pct: bool,
         # `kind` is "sector" or "market": the second mixes industries and is a
         # level rather than a peer comparison, so it is never printed as the
         # first. A bank's margin next to an airline's is not a like comparison.
-        reference = f"{kind} {ref_display}, n={n}"
+        thin = n is not None and n < THIN_SAMPLE
+        reference = f"{kind} {ref_display}, n={n}" + (", thin" if thin else "")
         ahead = value < median if lower_is_better else value > median
+        return Fact(label, display, reference, bool(ahead), thin)
     else:
         line = ABSOLUTE.get(label)
         if line is None:

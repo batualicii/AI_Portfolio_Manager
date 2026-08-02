@@ -179,3 +179,33 @@ def test_the_pool_states_that_its_order_is_not_a_ranking(stats, tmp_path):
 
     assert "reading order and nothing else" in text
     assert "not to buy" in text
+
+
+def test_a_six_name_median_cannot_look_like_a_hundred_name_one(tmp_path,
+                                                               monkeypatch):
+    """Every covered BIST sector is n<10 — an "ahead" there is near a coin flip."""
+    path = tmp_path / "sector_stats_BIST.json"
+    path.write_text(json.dumps({"market": "BIST", "sectors": {
+        "Bankacılık": {
+            "profit_margin": {"median": 0.20, "n": 6, "values": [0.1, 0.2, 0.3]},
+            "pe_ratio": {"median": 5.0, "n": 6, "values": [3.0, 5.0, 8.0]},
+        },
+    }}))
+    monkeypatch.setattr(interpret, "STATS_DIR", tmp_path)
+    monkeypatch.setattr(interpret, "STATS", tmp_path / "absent.json")
+
+    f = Fundamentals(symbol="X", sector="Bankacılık", profit_margin=0.25,
+                     pe_ratio=4.0)
+    card = build_card("X", Market.BIST, f, sector="Bankacılık")
+
+    assert all(fact.thin for fact in card.facts)
+    assert all("n=6, thin" in fact.reference for fact in card.facts)
+    assert card.tally == "2/2 ahead, 2 on a thin sample"
+
+
+def test_a_deep_sample_carries_no_thin_marker(stats):
+    """n=64 must read as the firmer evidence it is."""
+    card = build_card("X", Market.US, FUNDAMENTALS, _Price(), sector="Tech")
+    assert not card.thin_facts
+    assert "thin" not in card.tally
+    assert all("thin" not in f.reference for f in card.facts)
