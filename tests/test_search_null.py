@@ -169,3 +169,42 @@ def test_an_empty_basket_does_not_become_a_silent_nan_average(sn):
     # Date 0 is unpriceable and contributes nothing; date 1 is +15% against a
     # +20% benchmark, so the annualised excess is 4 x (-5pp).
     assert np.isclose(out[0], (0.15 - 0.20) * 4)
+
+
+def test_a_date_outside_membership_coverage_is_dropped_not_approximated(sn):
+    """The clamp gave 1965-2014 the 2015 index: fifty years of hindsight.
+
+    The tell in the first corrected run was the eligible count sitting at
+    exactly 404 names every year for half a century, while the real index
+    turned over hundreds of times.
+    """
+    import inspect
+
+    source = inspect.getsource(sn.build_panel)
+    assert "min(max(day.year" not in source, "the clamp must not come back"
+    assert "covered[t] = True" in source
+    assert "eligible names per year" in source, "the tell must stay visible"
+
+    main = inspect.getsource(sn.main)
+    assert "Dropping" in main and "cannot be approximated" in main
+
+
+def test_too_few_covered_dates_is_reported_as_the_answer_not_worked_around(sn):
+    """A sample that shrinks to nothing is a finding about the data."""
+    import inspect
+
+    main = " ".join(inspect.getsource(sn.main).split())
+    assert "it is the answer" in main
+    assert "cannot say" in main and "membership coverage" in main
+
+
+def test_the_module_says_what_the_null_cannot_correct(sn):
+    """A high percentile means "not from the search", never "real".
+
+    A hindsight universe creates a genuine score-to-return relationship, so the
+    null cloud sits low and the winner clears it — correctly about noise, wrongly
+    about reality. Losing this distinction is how the second bug survived a run.
+    """
+    doc = " ".join(sn.__doc__.split())
+    assert "does not mean the result is real" in doc
+    assert "correct about noise and wrong about reality" in doc

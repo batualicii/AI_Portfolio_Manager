@@ -199,6 +199,26 @@ falsifier**, never as a reason to buy or sell on their own.
   on data with no signal in it** — the same order as the +6.6 pp/yr recorded below.
   Any future sweep that omits this correction is measuring how hard it searched.
 
+- **A null corrects the search, never the universe — and both look identical in the
+  output.** Permuting returns removes the inflation contributed by trying many
+  combinations. It cannot remove bias baked into which names were selectable, because
+  a hindsight universe creates a *genuine* score-to-return relationship: the names
+  really did go on to rise. The null cloud then sits low, the winner clears it, and the
+  verdict reads "beyond what this search finds in noise" — correct about noise, wrong
+  about reality. **A high null percentile means the result did not come from the
+  search. It never means the result is real.** This was learned by shipping the mistake
+  twice in one file: first searching `dropped_names` (the companies that *left* the
+  index) and then clamping every pre-2015 date to the 2015 membership list, which gave
+  fifty years of runs the same 404 survivors. Momentum went from +5.1 to +19.7 pp/yr on
+  that clamp alone. Dates without real membership data are now dropped, never
+  approximated.
+
+- **Point-in-time membership exists only for 2015–2026, so nothing here can speak about
+  selection before 2015.** With the clamp removed the training window falls to ~23
+  quarterly rebalances. That is not an obstacle to route around; it is the finding. The
+  only honest remedies are real PIT membership data for earlier years, or silence about
+  them.
+
 - **The ceiling: at this portfolio size, no backtest here can establish an edge.** Read
   this first, because it bounds everything below it. The annual edge of an 8-name book
   has a standard deviation of **13.3 pp** (measured, 2017–2026). Over ten years that is a

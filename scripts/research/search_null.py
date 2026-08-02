@@ -41,6 +41,24 @@ which is exactly the counterfactual the question needs.
 The scores never change between worlds, so the selection each combination makes
 is computed once and reused. That is what makes a thousand null worlds cheap.
 
+## What the null does NOT correct — read this before believing a high percentile
+
+The permutation removes the inflation contributed by **searching**. It does not
+remove bias baked into the **universe**, and the difference is easy to miss
+because both show up as a high percentile.
+
+If the eligible names on a 1990 date are the companies that were in the index in
+2015 and are still priceable today, then momentum genuinely predicts returns in
+that dataset — the names were selected for having gone on to rise. Permuting the
+returns destroys that relationship in the null worlds too, so the null cloud sits
+low and the real result clears it easily. The verdict then reads "beyond what
+this search finds in noise", and it is correct about noise and wrong about
+reality.
+
+So: a high percentile means *the result did not come from the search*. It does
+not mean the result is real. The membership mask below is what closes the other
+door, and it closes it by dropping dates rather than approximating them.
+
 ## What it deliberately cannot test
 
 Only price-derived signals. There is no free point-in-time fundamentals history,
@@ -162,13 +180,34 @@ def build_panel(period: str = "max") -> None:
     # 2016 that only entered the index in 2023 — selected, in effect, for having
     # gone on to succeed. That is the single largest bias available here, and
     # this repo has already measured it at 36.4 pp/yr.
+    #
+    # A date outside the membership file's coverage is marked uncovered, not
+    # clamped to the nearest year. The first version clamped, which silently gave
+    # every date from 1963 to 2014 the 2015 index — fifty years of buying the
+    # companies that would still exist in 2015 and still be priceable in 2026.
+    # The tell was that the eligible count printed below never moved: 404 names,
+    # every year, for half a century. It is printed for exactly that reason.
     columns = list(panel.columns)
     eligible = np.zeros((len(dates), len(columns)), dtype=bool)
+    covered = np.zeros(len(dates), dtype=bool)
     years = sorted(by_year)
     for t, day in enumerate(dates):
-        year = min(max(day.year, years[0]), years[-1])
-        members = by_year[year]
+        if not (years[0] <= day.year <= years[-1]):
+            continue
+        members = by_year[day.year]
         eligible[t] = np.array([s in members for s in columns])
+        covered[t] = True
+
+    log.warning("\n  membership coverage: %d of %d rebalance dates (%s..%s)",
+                covered.sum(), len(dates), years[0], years[-1])
+    log.warning("  eligible names per year — a flat column here means the "
+                "membership is being reused, not read:")
+    seen_years: set[int] = set()
+    for t, day in enumerate(dates):
+        if day.year in seen_years or not covered[t]:
+            continue
+        seen_years.add(day.year)
+        log.warning("    %d  %d", day.year, int(eligible[t].sum()))
 
     scores = np.full((len(NAMES), len(dates), panel.shape[1]), np.nan)
     for k, name in enumerate(NAMES):
@@ -192,6 +231,7 @@ def build_panel(period: str = "max") -> None:
     CACHE.parent.mkdir(parents=True, exist_ok=True)
     np.savez_compressed(
         CACHE, scores=scores, forward=forward, eligible=eligible,
+        covered=covered,
         symbols=np.array(panel.columns), dates=np.array([str(d.date()) for d in dates]),
         signal_names=np.array(NAMES),
     )
@@ -290,6 +330,32 @@ def main() -> int:
     dates = [str(d) for d in blob["dates"]]
     names = [str(s) for s in blob["signal_names"]]
     rng = np.random.default_rng(args.seed)
+
+    # Dates the membership file does not cover are dropped, not approximated.
+    # Keeping them means searching a universe chosen with hindsight, and the
+    # null cannot rescue that: permuting returns removes the inflation the
+    # *search* adds, while a hindsight universe creates a real score-to-return
+    # relationship in the data. The null would report it as a genuine finding
+    # because, within that universe, it is one.
+    covered = blob["covered"] if "covered" in blob else np.ones(len(dates), bool)
+    if not covered.all():
+        dropped = int((~covered).sum())
+        print(f"\n  Dropping {dropped} of {len(dates)} rebalance dates with no "
+              f"point-in-time membership.\n  They cannot be approximated: the "
+              f"nearest year's index is the set of companies that\n  went on to "
+              f"be in it, which is the bias this file exists to avoid.")
+        scores = scores[:, covered, :]
+        forward = forward[covered]
+        dates = [d for d, keep in zip(dates, covered) if keep]
+
+    if len(dates) < 20:
+        print(f"\n  Only {len(dates)} usable rebalance dates remain. That is not "
+              f"a search\n  problem to be worked around — it is the answer: this "
+              f"data cannot say\n  anything about selection outside its "
+              f"membership coverage. Widen the\n  coverage with real "
+              f"point-in-time data, or accept the limit.")
+        if len(dates) < 8:
+            return 1
 
     # The holdout is carved off before anything is searched and is not touched
     # again until one frozen winner is applied to it, once.
