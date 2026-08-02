@@ -188,6 +188,17 @@ falsifier**, never as a reason to buy or sell on their own.
 
 ## 6c. Known limits of the backtest (read before believing any number it prints)
 
+- **A parameter search is scored against the best obtainable from noise, never against
+  zero.** `scripts/research/search_null.py` runs the full sweep — every indicator,
+  weight and basket size — and then runs the identical sweep on hundreds of worlds
+  where the symbol→forward-return mapping has been permuted, destroying predictability
+  while leaving the market, the dispersion and the equal-weight benchmark intact. The
+  maximum of many noisy draws is far from their mean, so the only valid question is
+  where the real winner falls in the distribution of null winners. A synthetic test
+  pins the magnitude: **a few hundred combinations yield ~+9 pp/yr of "excess return"
+  on data with no signal in it** — the same order as the +6.6 pp/yr recorded below.
+  Any future sweep that omits this correction is measuring how hard it searched.
+
 - **The ceiling: at this portfolio size, no backtest here can establish an edge.** Read
   this first, because it bounds everything below it. The annual edge of an 8-name book
   has a standard deviation of **13.3 pp** (measured, 2017–2026). Over ten years that is a
