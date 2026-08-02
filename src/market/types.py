@@ -48,6 +48,14 @@ class Fundamentals:
     revenue_growth: float | None = None
     beta: float | None = None
     sector: str | None = None
+    # What fraction of the shares institutions already hold. The directly
+    # relevant number for a small investor: a name large funds have already
+    # crowded into offers none of the capacity advantage that makes small-cap
+    # investing worth doing at all (SPEC section 0).
+    held_pct_institutions: float | None = None
+    # What the company says it does. Research needs it and no signal ever did,
+    # which is why it was not here before.
+    business_summary: str | None = None
 
 
 @dataclass(frozen=True)

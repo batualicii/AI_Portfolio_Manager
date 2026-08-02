@@ -9,6 +9,7 @@ Reused by /scan and (Stage 6) the daily digest.
 """
 from __future__ import annotations
 
+from src.bot.markdown import escape_md
 from src.models import Action, Market, Recommendation
 
 # Suggested ceiling for the tactical sleeve, from the Stage 4 validation.
@@ -31,9 +32,15 @@ def _cur(market: Market) -> str:
 
 
 def _clip(text: str, limit: int = 360) -> str:
-    """Trim only very long deterministic-note fallbacks; one-sentence LLM prose fits."""
+    """Trim only very long deterministic-note fallbacks; one-sentence LLM prose fits.
+
+    Escaped on the way out: rationales carry LLM prose and news headlines, and an
+    unbalanced `_` or `*` in there makes Telegram reject the entire digest.
+    """
     text = text.strip()
-    return text if len(text) <= limit else text[: limit - 1].rstrip() + "…"
+    if len(text) > limit:
+        text = text[: limit - 1].rstrip() + "…"
+    return escape_md(text)
 
 
 def format_recommendations(
@@ -56,7 +63,7 @@ def format_recommendations(
     if buys:
         for r in buys:
             lines.append(
-                f"🟢 *{r.symbol}* ({r.market.value}) @ {r.price:g} {_cur(r.market)}"
+                f"🟢 *{escape_md(r.symbol)}* ({r.market.value}) @ {r.price:g} {_cur(r.market)}"
                 f"{_levels(r)}  _score {r.score:+.2f}_"
             )
             if r.rationale:
@@ -69,7 +76,7 @@ def format_recommendations(
     if sells:
         for r in sells:
             lines.append(
-                f"🔴 *Breakdown alert: {r.symbol}* ({r.market.value}) @ {r.price:g} "
+                f"🔴 *Breakdown alert: {escape_md(r.symbol)}* ({r.market.value}) @ {r.price:g} "
                 f"— signal {r.score:+.2f}. Consider trimming/exiting this position."
             )
             if r.rationale:
@@ -78,13 +85,13 @@ def format_recommendations(
         for r in trims:
             stop = f"  ·  stop {r.stop_loss:g}" if r.stop_loss else ""
             lines.append(
-                f"🟠 *Weakening: {r.symbol}* ({r.market.value}) @ {r.price:g}"
+                f"🟠 *Weakening: {escape_md(r.symbol)}* ({r.market.value}) @ {r.price:g}"
                 f"{stop}  _score {r.score:+.2f}_"
             )
             if r.rationale:
                 lines.append(f"   {_clip(r.rationale)}")
     if holds:
-        held = ", ".join(f"{r.symbol} ({r.score:+.2f})" for r in holds)
+        held = ", ".join(f"{escape_md(r.symbol)} ({r.score:+.2f})" for r in holds)
         lines.append(f"⚪ *Healthy holds:* {held}")
     if not (sells or trims or holds):
         lines.append("_No holdings tracked yet._")

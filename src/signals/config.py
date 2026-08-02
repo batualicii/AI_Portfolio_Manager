@@ -37,6 +37,10 @@ class SignalConfig:
     # --- risk / sizing (ATR-based) ---
     atr_stop_mult: float = 2.0      # stop = entry - 2*ATR
     atr_target_mult: float = 3.5    # target = entry + 3.5*ATR (reward:risk ~1.75)
+    # Trailing ("chandelier") stop on an open position: hang the stop off the
+    # highest close of the last N bars rather than off today's price, so the stop
+    # ratchets up in a rising trend and holds its level in a falling one.
+    hold_stop_lookback: int = 20
     max_position_weight: float = 0.15   # hard cap: no single name > 15% of book
     base_position_weight: float = 0.06  # baseline size for a just-qualifying BUY
     risk_per_trade: float = 0.02    # risk ~2% of equity per trade (sizing input)

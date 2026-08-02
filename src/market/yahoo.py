@@ -17,37 +17,17 @@ import yfinance as yf
 from src.market.provider import MarketDataProvider
 from src.market.types import Bar, Fundamentals, Quote
 from src.models import Market
+from src.util.cache import TTLCache
 
 log = logging.getLogger(__name__)
-
-
-class _TTLCache:
-    """Tiny time-boxed cache. monotonic-free: stores wall-clock and compares."""
-
-    def __init__(self, ttl_seconds: float) -> None:
-        self._ttl = ttl_seconds
-        self._data: dict[str, tuple[float, object]] = {}
-
-    def get(self, key: str) -> object | None:
-        hit = self._data.get(key)
-        if hit is None:
-            return None
-        ts, value = hit
-        if (datetime.now(timezone.utc).timestamp() - ts) > self._ttl:
-            self._data.pop(key, None)
-            return None
-        return value
-
-    def set(self, key: str, value: object) -> None:
-        self._data[key] = (datetime.now(timezone.utc).timestamp(), value)
 
 
 class YahooProvider(MarketDataProvider):
     def __init__(self, quote_ttl: float = 300.0) -> None:
         # Quotes cached 5 min; history/fundamentals 1 h (they change slowly intraday).
-        self._quote_cache = _TTLCache(quote_ttl)
-        self._hist_cache = _TTLCache(3600.0)
-        self._fx_cache = _TTLCache(3600.0)
+        self._quote_cache = TTLCache(quote_ttl)
+        self._hist_cache = TTLCache(3600.0)
+        self._fx_cache = TTLCache(3600.0)
 
     # ------------------------------ quotes ------------------------------
 
@@ -132,6 +112,8 @@ class YahooProvider(MarketDataProvider):
             revenue_growth=_num(info.get("revenueGrowth")),
             beta=_num(info.get("beta")),
             sector=info.get("sector"),
+            held_pct_institutions=_num(info.get("heldPercentInstitutions")),
+            business_summary=info.get("longBusinessSummary"),
         )
 
     # ------------------------------- FX ---------------------------------

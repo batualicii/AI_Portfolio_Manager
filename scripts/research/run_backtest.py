@@ -26,20 +26,32 @@ def _fmt_metrics(label: str, m) -> str:
 
 
 def _verdict(r: BacktestResult) -> str:
-    beat_return = r.metrics.total_return_pct - r.benchmark_metrics.total_return_pct
-    better_dd = r.metrics.max_drawdown_pct - r.benchmark_metrics.max_drawdown_pct
-    win = beat_return > 0
-    flags = []
-    flags.append(("BEATS" if win else "TRAILS") + f" buy&hold by {beat_return:+.1f}% total return")
-    flags.append(f"drawdown {'better' if better_dd > 0 else 'worse'} by {better_dd:+.1f}%")
-    flags.append(f"Sharpe {r.metrics.sharpe:.2f} vs {r.benchmark_metrics.sharpe:.2f}")
+    """Judge against the equal-weight universe, not the index.
+
+    The index comparison flatters the strategy: the watchlist is a hand-picked
+    list of names that are large and successful *today*, so trading them beats a
+    broad index partly because of the list. Holding the same names equal-weight
+    holds that hindsight constant, so the difference is the timing logic alone.
+    """
+    reference = r.universe_metrics or r.benchmark_metrics
+    label = "equal-wt universe" if r.universe_metrics else "index"
+    beat_return = r.metrics.total_return_pct - reference.total_return_pct
+    better_dd = r.metrics.max_drawdown_pct - reference.max_drawdown_pct
+    flags = [
+        ("BEATS" if beat_return > 0 else "TRAILS")
+        + f" {label} by {beat_return:+.1f}% total return",
+        f"drawdown {'better' if better_dd > 0 else 'worse'} by {better_dd:+.1f}%",
+        f"Sharpe {r.metrics.sharpe:.2f} vs {reference.sharpe:.2f}",
+    ]
     return " | ".join(flags)
 
 
 def run_one(market: Market, provider: YahooProvider) -> None:
-    print(f"\n{'='*78}\n{market.value} MARKET  (vs index buy-and-hold)\n{'='*78}")
+    print(f"\n{'='*78}\n{market.value} MARKET\n{'='*78}")
     result = Backtester(market, provider).run()
     print(_fmt_metrics("Strategy", result.metrics))
+    if result.universe_metrics:
+        print(_fmt_metrics("Buy & hold (equal-wt)", result.universe_metrics))
     print(_fmt_metrics("Buy & hold (index)", result.benchmark_metrics))
     m = result.metrics
     print(
@@ -65,6 +77,9 @@ def main() -> int:
     print(
         "\nNOTE: backtest uses technical+macro signals only (no historical "
         "fundamentals/news). Past performance does not guarantee future results."
+        "\nNOTE: the watchlist is survivorship-biased — it lists names that are "
+        "large and successful today. Judge against the equal-weight universe "
+        "column, which holds that bias constant; the index column does not."
     )
     return 0
 

@@ -17,7 +17,13 @@ from src.market.types import Bar
 def bars_to_frame(bars: list[Bar]) -> pd.DataFrame:
     """Convert provider Bars into an OHLCV DataFrame indexed by date."""
     if not bars:
-        return pd.DataFrame(columns=["open", "high", "low", "close", "volume"])
+        # Keep the DatetimeIndex even when empty: callers do index arithmetic
+        # (.normalize(), slicing by date) and a bare RangeIndex turns a clean
+        # "no data for this market" error into a confusing AttributeError.
+        return pd.DataFrame(
+            columns=["open", "high", "low", "close", "volume"],
+            index=pd.DatetimeIndex([]),
+        )
     df = pd.DataFrame(
         {
             "open": [b.open for b in bars],
@@ -37,6 +43,56 @@ def sma(series: pd.Series, window: int) -> pd.Series:
 
 def ema(series: pd.Series, window: int) -> pd.Series:
     return series.ewm(span=window, adjust=False, min_periods=window).mean()
+
+
+def sustained_below_ma(
+    close: pd.Series, ma_window: int = 200, bars: int = 20
+) -> bool | None:
+    """Has every one of the last `bars` closes sat below the moving average?
+
+    The difference between "the price fell" and "the trend is over". A single
+    dip below the average is noise; a sustained one is the story changing. This
+    tolerates the deep drawdowns a position must survive to compound while still
+    marking a name whose trend has genuinely ended.
+
+    None when there is not enough history to judge, which callers must read as
+    "no verdict" rather than as False — an absent answer and a negative one mean
+    different things.
+
+    Lives here, in the shared numeric layer, because the backtest's exit rule and
+    the live thesis monitor must use the identical definition. This project has
+    already shipped one bug where a live formula and its backtest counterpart
+    drifted apart (SPEC section 6c); sharing the primitive is how that is
+    prevented rather than merely regretted.
+    """
+    if bars < 1 or len(close) < ma_window + bars:
+        return None
+    avg = sma(close, ma_window)
+    recent = close.iloc[-bars:] < avg.iloc[-bars:]
+    return bool(recent.all())
+
+
+def bars_below_ma(close: pd.Series, ma_window: int = 200) -> int | None:
+    """How many closes in a row, right now, sit below the moving average.
+
+    `sustained_below_ma` answers a yes/no a falsifier can fire on. This answers
+    "how long has it been like this", which is what a human reading a position
+    wants — the difference between a three-day dip and a six-week one. Same
+    moving average, so the two can never disagree about what "below" means.
+
+    None when there is not enough history, never 0: "not measured" and "it is
+    above the average today" are different statements.
+    """
+    if len(close) < ma_window:
+        return None
+    avg = sma(close, ma_window)
+    below = (close < avg).iloc[-ma_window:]
+    count = 0
+    for value in reversed(below.tolist()):
+        if not value:
+            break
+        count += 1
+    return count
 
 
 def rsi(close: pd.Series, window: int = 14) -> pd.Series:
@@ -90,9 +146,3 @@ def bollinger(
 def rate_of_change(close: pd.Series, window: int) -> pd.Series:
     """Percent change over `window` bars, in percent."""
     return close.pct_change(periods=window) * 100.0
-
-
-def pct_from_high(close: pd.Series, window: int) -> pd.Series:
-    """Percent below the rolling `window`-bar high (0 = at the high, negative below)."""
-    roll_high = close.rolling(window=window, min_periods=1).max()
-    return (close - roll_high) / roll_high * 100.0

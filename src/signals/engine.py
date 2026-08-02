@@ -21,12 +21,13 @@ from src.market.provider import MarketDataProvider, NewsProvider
 from src.models import Action, Holding, Market, Recommendation
 from src.signals import indicators as ind
 from src.signals.config import SignalConfig
-from src.signals.risk import buy_levels, hold_stop
+from src.signals.risk import buy_levels, hold_stop, stop_breached
 from src.signals.scoring import (
     fundamental_score,
     sentiment_score,
     technical_score,
 )
+from src.util.cache import TTLCache
 
 log = logging.getLogger(__name__)
 
@@ -47,17 +48,22 @@ class SignalEngine:
         provider: MarketDataProvider,
         news: NewsProvider,
         cfg: SignalConfig | None = None,
+        regime_ttl: float = 3600.0,
     ) -> None:
         self._provider = provider
         self._news = news
         self._cfg = cfg or SignalConfig()
-        self._regime_cache: dict[Market, Regime] = {}
+        # The engine lives as long as the bot process, which runs for weeks. An
+        # unbounded cache here would pin the regime to whatever it was the first
+        # time the bot started and never notice the market turning.
+        self._regime_cache = TTLCache(regime_ttl)
 
     # ------------------------------ regime ------------------------------
 
     def regime(self, market: Market) -> Regime:
-        if market in self._regime_cache:
-            return self._regime_cache[market]
+        cached = self._regime_cache.get(market.value)
+        if isinstance(cached, Regime):
+            return cached
         cfg = self._cfg
         symbol = cfg.index_symbol[market]
         # Index symbols are already full yfinance tickers; pass through US to avoid
@@ -67,7 +73,7 @@ class SignalEngine:
         )
         if len(bars) < _MIN_BARS:
             reg = Regime(market, risk_off=False, score=0.0, note="regime unknown")
-            self._regime_cache[market] = reg
+            self._regime_cache.set(market.value, reg)
             return reg
         close = ind.bars_to_frame(bars)["close"]
         sma = ind.sma(close, cfg.regime_sma).iloc[-1]
@@ -84,7 +90,7 @@ class SignalEngine:
         else:
             score, risk_off, note = max(-0.4, min(0.4, roc / 15.0)), False, "regime: short history"
         reg = Regime(market, risk_off=risk_off, score=max(-1.0, min(1.0, score)), note=note)
-        self._regime_cache[market] = reg
+        self._regime_cache.set(market.value, reg)
         return reg
 
     # ----------------------------- analysis -----------------------------
@@ -100,16 +106,26 @@ class SignalEngine:
         df = ind.bars_to_frame(bars)
 
         tech, view = technical_score(df, cfg)
-        fund = fundamental_score(self._provider.get_fundamentals(symbol, market), cfg)
-        sent = sentiment_score(self._news.get_news(symbol, market), cfg)
+        fund = fundamental_score(self._provider.get_fundamentals(symbol, market))
+        sent = sentiment_score(self._news.get_news(symbol, market))
         reg = self.regime(market)
 
-        denom = cfg.w_technical + cfg.w_fundamental + cfg.w_sentiment + cfg.w_macro
-        composite = (
-            cfg.w_technical * tech.value
-            + cfg.w_fundamental * fund.value
-            + cfg.w_sentiment * sent.value
-            + cfg.w_macro * reg.score
+        # Renormalise over the sub-scores that actually had data. A component that
+        # returned 0.0 because nothing was available is not a neutral opinion, and
+        # leaving its weight in the denominator quietly shrinks the composite: with
+        # fundamentals and news missing — the permanent state for BIST names — the
+        # score could only ever reach ±0.70, while buy_threshold and sell_threshold
+        # were tuned on a backtest that renormalises over technical+macro and does
+        # span [-1, +1]. Same formula on both sides now.
+        contributions = [
+            (cfg.w_technical, tech.value, True),
+            (cfg.w_fundamental, fund.value, fund.available),
+            (cfg.w_sentiment, sent.value, sent.available),
+            (cfg.w_macro, reg.score, True),
+        ]
+        denom = sum(w for w, _, available in contributions if available) or 1.0
+        composite = sum(
+            w * value for w, value, available in contributions if available
         ) / denom
 
         notes = (
@@ -128,12 +144,16 @@ class SignalEngine:
         cfg = self._cfg
         if composite <= cfg.sell_threshold:
             action, stop, target, weight = Action.SELL, None, None, None
-        elif composite <= cfg.trim_threshold:
-            action = Action.TRIM
-            stop, target, weight = hold_stop(view.price, view.atr, cfg), None, None
         else:
-            action = Action.HOLD
-            stop, target, weight = hold_stop(view.price, view.atr, cfg), None, None
+            action = Action.TRIM if composite <= cfg.trim_threshold else Action.HOLD
+            stop, target, weight = hold_stop(view, cfg), None, None
+            if stop_breached(view, stop):
+                # The trailing stop has already been taken out. That is an exit
+                # signal in its own right, whatever the composite score says —
+                # the whole point of a mandatory stop is that it is not optional.
+                action = Action.SELL
+                rationale += f" | trailing stop {stop:g} breached at {view.price:g}"
+                stop = None
         return self._mk(symbol, market, action, composite, view.price, stop, target, weight, rationale)
 
     def _decide_candidate(self, symbol, market, composite, view, risk_off, rationale):

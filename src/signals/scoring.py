@@ -23,6 +23,10 @@ def _clamp(x: float, lo: float = -1.0, hi: float = 1.0) -> float:
 class SubScore:
     value: float
     notes: list[str] = field(default_factory=list)
+    # False when the inputs simply were not there. A 0.0 that means "no data" is
+    # not the same as a 0.0 that means "genuinely neutral", and blending the two
+    # identically silently dilutes the composite — see SignalEngine.analyze.
+    available: bool = True
 
 
 # ------------------------------- technical -------------------------------
@@ -35,6 +39,9 @@ class TechnicalView:
     rsi: float
     sma50: float | None
     sma200: float | None
+    # Highest close over the trailing stop lookback. Lets a held position's stop
+    # ratchet up with the trend instead of drifting down with the price.
+    recent_high: float = 0.0
 
 
 def technical_score(df: pd.DataFrame, cfg: SignalConfig) -> tuple[SubScore, TechnicalView]:
@@ -88,13 +95,14 @@ def technical_score(df: pd.DataFrame, cfg: SignalConfig) -> tuple[SubScore, Tech
         price=price, atr=atr_val, rsi=rsi_val,
         sma50=float(sma50) if pd.notna(sma50) else None,
         sma200=float(sma200) if pd.notna(sma200) else None,
+        recent_high=float(close.tail(cfg.hold_stop_lookback).max()),
     )
     return SubScore(value=value, notes=notes), view
 
 
 # ------------------------------ fundamental ------------------------------
 
-def fundamental_score(f: Fundamentals, cfg: SignalConfig) -> SubScore:
+def fundamental_score(f: Fundamentals) -> SubScore:
     parts: list[float] = []
     notes: list[str] = []
 
@@ -122,7 +130,7 @@ def fundamental_score(f: Fundamentals, cfg: SignalConfig) -> SubScore:
         notes.append(f"margin {pm:+.0f}%")
 
     if not parts:
-        return SubScore(value=0.0, notes=["limited fundamentals"])
+        return SubScore(value=0.0, notes=["limited fundamentals"], available=False)
     return SubScore(value=_clamp(sum(parts) / len(parts)), notes=notes)
 
 
@@ -136,11 +144,12 @@ _NEG = {"miss", "misses", "plunge", "drop", "downgrade", "downgraded", "loss",
         "recall", "sell", "bearish", "falls", "decline", "slump", "halt", "delay"}
 
 
-def sentiment_score(news: list[NewsItem], cfg: SignalConfig) -> SubScore:
+def sentiment_score(news: list[NewsItem]) -> SubScore:
     """Lightweight lexicon sentiment over headlines. Deliberately low-confidence
     (clamped to ±0.5) — it nudges, never dominates. Empty news = neutral."""
     if not news:
-        return SubScore(value=0.0, notes=["no recent news"])
+        # Permanent state for BIST names — Finnhub has no coverage there.
+        return SubScore(value=0.0, notes=["no recent news"], available=False)
     pos = neg = 0
     for item in news:
         words = set(item.headline.lower().replace(",", " ").split())
