@@ -327,6 +327,38 @@ def format_pool(cards, market: str, built_at: str, new_symbols=None,
     return "\n".join(lines)
 
 
+def format_scorecard(card) -> str:
+    """The verdict on the owner's own selection — including "too early to say"."""
+    lines = ["🎯 *Selection scorecard*", "",
+             escape_md("Your picks against the names you saw and declined. Not "
+                       "against the index — this isolates the one part of the "
+                       "system that is your judgement."), "",
+             escape_md(card.verdict), ""]
+
+    for title, group in (("Bought", card.bought), ("Passed", card.passed)):
+        if not group:
+            continue
+        ordered = sorted(group, key=lambda o: o.return_pct, reverse=True)
+        lines.append(f"*{title}* ({len(group)})")
+        for o in ordered[:12]:
+            line = (f"· {escape_md(o.symbol)} {o.return_pct:+.0f}% "
+                    f"over {o.days_held}d")
+            if o.reason:
+                line += f" — _{escape_md(o.reason[:60])}_"
+            lines.append(line)
+        if len(ordered) > 12:
+            lines.append(escape_md(f"  …and {len(ordered) - 12} more"))
+        lines.append("")
+
+    if card.unpriced:
+        # Dropping these silently would bias the comparison toward whichever
+        # side happens to still be quoted.
+        lines += ["*Could not be priced*",
+                  escape_md(", ".join(card.unpriced[:10])), ""]
+
+    return "\n".join(lines)
+
+
 def format_audit(rows) -> str:
     """Every position, with the one question that decides it.
 

@@ -125,6 +125,25 @@ CREATE TABLE IF NOT EXISTS pool_candidates (
 );
 
 CREATE INDEX IF NOT EXISTS idx_pool_run ON pool_candidates (market, built_at);
+
+-- Every selection decision, taken and declined alike. This is the only thing in
+-- the system that can eventually answer the question the whole design rests on:
+-- the pool narrows, the owner chooses, and *nothing else measures whether the
+-- choosing adds anything*. Recording only purchases would compare the owner's
+-- picks against nothing; recording the passes too means the comparison is
+-- against the alternatives they actually had, at the moment they had them.
+CREATE TABLE IF NOT EXISTS decisions (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    decided_at  TEXT NOT NULL,
+    symbol      TEXT NOT NULL,
+    market      TEXT NOT NULL,
+    action      TEXT NOT NULL,          -- BOUGHT | PASSED
+    price       REAL,                   -- at the moment of deciding
+    reason      TEXT NOT NULL DEFAULT ''
+);
+
+CREATE INDEX IF NOT EXISTS idx_decision_symbol ON decisions (symbol, market);
+CREATE INDEX IF NOT EXISTS idx_decision_when ON decisions (decided_at);
 """
 
 _POOL_FIELDS = (
@@ -507,6 +526,65 @@ class Store:
         latest = {r["symbol"] for r in self.pool(market, runs[0])}
         previous = {r["symbol"] for r in self.pool(market, runs[1])}
         return latest - previous
+
+    # ---------------------------- decisions -----------------------------
+
+    def record_decision(self, symbol: str, market: Market, action: str,
+                        price: float | None = None, reason: str = "",
+                        when: datetime | None = None) -> int:
+        """Log one selection call. Duplicates are kept, not merged.
+
+        Changing your mind is itself data — a name passed in March and bought in
+        August is two decisions, and collapsing them would hide the second
+        thought that turned out to matter.
+        """
+        stamp = (when or datetime.now(timezone.utc)).isoformat()
+        with self._lock:
+            cur = self._conn.execute(
+                "INSERT INTO decisions (decided_at, symbol, market, action, "
+                "price, reason) VALUES (?, ?, ?, ?, ?, ?)",
+                (stamp, symbol.upper(), market.value, action.upper(), price, reason),
+            )
+            self._conn.commit()
+            return int(cur.lastrowid)
+
+    def decisions(self, action: str | None = None,
+                  since: datetime | None = None) -> list[dict]:
+        sql = ("SELECT id, decided_at, symbol, market, action, price, reason "
+               "FROM decisions WHERE 1=1")
+        params: list = []
+        if action:
+            sql += " AND action = ?"
+            params.append(action.upper())
+        if since is not None:
+            sql += " AND decided_at >= ?"
+            params.append(since.isoformat())
+        sql += " ORDER BY decided_at"
+        with self._lock:
+            return [dict(r) for r in self._conn.execute(sql, params)]
+
+    def last_decision(self, symbol: str, market: Market) -> dict | None:
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT id, decided_at, symbol, market, action, price, reason "
+                "FROM decisions WHERE symbol = ? AND market = ? "
+                "ORDER BY decided_at DESC LIMIT 1",
+                (symbol.upper(), market.value),
+            ).fetchone()
+        return dict(row) if row else None
+
+    def passed_symbols(self, market: Market, since: datetime | None = None
+                       ) -> dict[str, dict]:
+        """Names last declined, keyed by symbol — for suppressing them later.
+
+        Keyed on the *last* decision, so a name passed and later bought stops
+        counting as passed.
+        """
+        out: dict[str, dict] = {}
+        for row in self.decisions(since=since):
+            if Market(row["market"]) is market:
+                out[row["symbol"]] = row
+        return {s: r for s, r in out.items() if r["action"] == "PASSED"}
 
     def unexplained_closures(self, since: datetime | None = None) -> int:
         """How often a position was sold with nothing having actually broken."""

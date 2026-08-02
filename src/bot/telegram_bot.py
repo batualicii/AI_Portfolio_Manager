@@ -48,6 +48,7 @@ from src.portfolio.guardrails import (
     sale_without_cause,
     trade_pace,
 )
+from src.portfolio.scorecard import build_scorecard
 from src.portfolio.valuation import ValuationService
 from src.reasoning.narrator import ClaudeNarrator
 from src.signals import indicators as ind
@@ -62,6 +63,7 @@ from src.thesis.format import (
     format_brief,
     format_pool,
     format_positions,
+    format_scorecard,
     format_thesis,
     format_weekly,
 )
@@ -182,6 +184,10 @@ class PortfolioBot:
             CommandHandler("positions", self._owner_only(self._positions))
         )
         self._app.add_handler(CommandHandler("pool", self._owner_only(self._pool)))
+        self._app.add_handler(CommandHandler("pass", self._owner_only(self._pass)))
+        self._app.add_handler(
+            CommandHandler("scorecard", self._owner_only(self._scorecard))
+        )
         self._app.add_handler(CommandHandler("draft", self._owner_only(self._draft)))
         self._app.add_handler(CommandHandler("digest", self._owner_only(self._digest_now)))
         self._app.add_handler(CommandHandler("log", self._owner_only(self._log)))
@@ -244,7 +250,9 @@ class PortfolioBot:
             "`/pool US refresh` — rescan now (minutes)\n"
             "`/brief US ASTH` — everything knowable about a name, on one page\n"
             "`/audit` — every position you hold, and the question that decides it\n"
-            "`/draft US ASTH 45 3 <rough thoughts>` — turns them into a ready line\n\n"
+            "`/draft US ASTH 45 3 <rough thoughts>` — turns them into a ready line\n"
+            "`/pass US ASTH too dear` — record a name you declined, and why\n"
+            "`/scorecard` — did your picks beat the ones you passed on?\n\n"
             "*Theses*\n"
             "`/thesis` — list them\n"
             "`/thesis NVDA` — one thesis and where each condition stands\n"
@@ -605,6 +613,58 @@ class PortfolioBot:
         await self._send_to_owner(format_pool(
             cards, market.value, built, self._store.new_in_pool(market), footer))
 
+    # -------------------------- selection record -------------------------
+
+    async def _pass(self, update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+        """/pass <US|BIST> <SYMBOL> <why> — record a name you looked at and declined.
+
+        The unglamorous half of the record, and the half that makes the other
+        half mean anything. Purchases alone can only be compared against the
+        index; purchases against passes compare your judgement against the
+        alternatives you actually had.
+        """
+        args = ctx.args or []
+        if len(args) < 3:
+            await update.effective_message.reply_text(
+                "Usage: `/pass US ASTH too expensive for the growth`\n\n"
+                "Records that you looked at it and said no, at today's price. "
+                "That is what your purchases get compared against.",
+                parse_mode=ParseMode.MARKDOWN)
+            return
+
+        market = _parse_market(args[0])
+        if market is None:
+            await update.effective_message.reply_text("Market must be US or BIST.")
+            return
+        symbol = args[1].upper()
+        reason = " ".join(args[2:])
+
+        quote = await asyncio.to_thread(self._provider.get_quote, symbol, market)
+        price = quote.price if quote else None
+        self._store.record_decision(symbol, market, "PASSED", price, reason)
+
+        if price is None:
+            await update.effective_message.reply_text(
+                f"Recorded — but {symbol} could not be priced just now, so it "
+                f"will sit outside the scorecard. Fine for remembering the "
+                f"reason; useless for measuring the call.")
+            return
+        await update.effective_message.reply_text(
+            f"Passed on {symbol} at {price:,.2f}. It will show up in /scorecard "
+            f"as one of the names your purchases are measured against, and /pool "
+            f"will stop treating it as new.")
+
+    async def _scorecard(self, update: Update, _: ContextTypes.DEFAULT_TYPE) -> None:
+        """/scorecard — did your picking beat your passing?"""
+        note = await update.effective_message.reply_text("Pricing every decision…")
+        card = await asyncio.to_thread(
+            build_scorecard, self._store, self._provider)
+        try:
+            await note.delete()
+        except Exception:  # noqa: BLE001 — cosmetic only
+            pass
+        await self._send_to_owner(format_scorecard(card))
+
     async def _draft(self, update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         """/draft <US|BIST> <SYMBOL> <PRICE> <1-5> <your rough thoughts>
 
@@ -760,6 +820,10 @@ class PortfolioBot:
                 f"for {thesis.symbol} — /close it first."
             )
             return
+        # A purchase is half of the selection record. Without the passes on the
+        # other side it compares against nothing, which is why /pass exists.
+        self._store.record_decision(
+            thesis.symbol, market, "BOUGHT", price, summary[:200])
         await self._send_to_owner(format_thesis(thesis))
 
     async def _check(self, update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
