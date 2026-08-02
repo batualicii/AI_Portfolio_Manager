@@ -252,7 +252,14 @@ def _card_block(card, prefix: str = "", suffix: str = "") -> list[str]:
     if card.headline:
         head += " · " + escape_md(" · ".join(card.headline))
     head += suffix
+    if not card.has_thesis and card.weight is not None:
+        head += "  ⚠️ no thesis"
     lines = [head, f"    _{escape_md(card.tally)}_"]
+
+    if card.tension:
+        # Placed above the figures, not below them. The figures were never the
+        # problem — nothing was putting two of them next to each other.
+        lines.append(f"    *{escape_md(card.tension)}*")
 
     for label, facts in (("ahead", card.ahead), ("behind", card.behind),
                          ("no ref", card.uncompared)):
@@ -264,6 +271,23 @@ def _card_block(card, prefix: str = "", suffix: str = "") -> list[str]:
     for warning in card.warnings:
         lines.append(f"    ⚠️ {escape_md(warning)}")
     return lines
+
+
+def _reference_footnote(cards) -> list[str]:
+    """Said once, at the end, instead of once per card.
+
+    Nine identical caveat paragraphs buried the numbers they existed to qualify,
+    which is its own kind of dishonesty: a warning nobody reads is not a warning.
+    """
+    sectors = sorted({c.sector for c in cards if getattr(c, "market_reference", False)})
+    if not sectors:
+        return []
+    return ["", escape_md(
+        "Comparisons for " + ", ".join(sectors) + " are against the whole market, "
+        "not sector peers — those sectors have too few names to take a median "
+        "from. It mixes industries on purpose: read those lines as the level a "
+        "company sits at, never as \"better than its peers\"."
+    )]
 
 
 def format_positions(cards, groups: dict[str, list], summary: list[str]) -> str:
@@ -293,6 +317,7 @@ def format_positions(cards, groups: dict[str, list], summary: list[str]) -> str:
         "down — and for anything with no thesis, that column is empty because "
         "you never filled it. /draft turns a rough sentence into one."
     ))
+    lines += _reference_footnote(cards)
     return "\n".join(lines)
 
 
@@ -333,6 +358,7 @@ def format_pool(cards, market: str, built_at: str, new_symbols=None,
             f"the honest shape of it."))
     if footer:
         lines.append(escape_md(footer))
+    lines += _reference_footnote(list(cards) + list(declined))
     lines.append(escape_md(
         "Ordered by momentum, which decides reading order and nothing else — "
         "this repo measured that a price ranking cannot be validated at this "

@@ -57,13 +57,20 @@ class ResearchBrief:
 def _price_context(frame: pd.DataFrame) -> PriceContext | None:
     if frame.empty or len(frame) < 30:
         return None
-    close = frame["close"]
+    # Gaps are dropped before anything is computed. BIST series carry empty
+    # closes on local holidays, and a single NaN inside the window makes the
+    # rolling mean NaN — which then rendered as "trend +nan%" on every Turkish
+    # position. A NaN must never reach the page as though it were a reading.
+    close = frame["close"].dropna()
+    if len(close) < 30:
+        return None
     last = float(close.iloc[-1])
     window = close.iloc[-252:] if len(close) >= 252 else close
 
     avg200 = ind.sma(close, 200)
-    vs_200 = (float(last / avg200.iloc[-1] - 1.0) * 100
-              if avg200.notna().any() else None)
+    last_avg = avg200.iloc[-1] if len(avg200) else float("nan")
+    vs_200 = (float(last / last_avg - 1.0) * 100
+              if pd.notna(last_avg) and last_avg else None)
 
     momentum = None
     if len(close) >= 252:

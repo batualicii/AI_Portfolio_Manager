@@ -109,7 +109,8 @@ def test_a_sector_without_peers_falls_back_to_the_whole_market(tmp_path,
     assert "market 9, n=96" in card.facts[0].reference
     assert "sector" not in card.facts[0].reference, "a level is not a peer set"
     assert card.facts[0].ahead is False          # dearer than the market
-    assert any("mixes industries" in w for w in card.warnings)
+    # Flagged on the card, spelled out once per report rather than nine times.
+    assert card.market_reference is True
 
 
 def test_each_market_reads_its_own_file(tmp_path, monkeypatch):
@@ -143,12 +144,12 @@ def test_a_position_without_a_thesis_is_flagged_on_its_own_card(stats):
     card = build_card("X", Market.US, FUNDAMENTALS, _Price(), sector="Tech",
                       weight=0.08, thesis_summary=None)
     assert card.has_thesis is False
-    assert any("no thesis" in w for w in card.warnings)
+    assert "⚠️ no thesis" in format_positions([card], {"x": [card]}, [])
 
     owned = build_card("X", Market.US, FUNDAMENTALS, _Price(), sector="Tech",
                        weight=0.08, thesis_summary="consolidating market")
     assert owned.has_thesis is True
-    assert not any("no thesis" in w for w in owned.warnings)
+    assert "⚠️ no thesis" not in format_positions([owned], {"x": [owned]}, [])
 
 
 def test_a_candidate_in_a_sector_you_are_heavy_in_is_flagged_not_hidden(stats):
@@ -209,3 +210,80 @@ def test_a_deep_sample_carries_no_thin_marker(stats):
     assert not card.thin_facts
     assert "thin" not in card.tally
     assert all("thin" not in f.reference for f in card.facts)
+
+
+def test_a_position_over_its_ceiling_is_told_how_it_got_there(stats):
+    """27.3% of the book is the most important fact in the report, and the
+    first version buried it in a percentage nobody weighed."""
+    card = build_card("ASTOR", Market.BIST, FUNDAMENTALS, _Price(),
+                      sector="Industrials", weight=0.273, since_entry_pct=308.0,
+                      ceiling=0.10, value_try=30437)
+
+    assert "27% of the book against a 10% ceiling" in card.tension
+    assert "not by being sized there" in card.tension
+    assert "30,437 TRY" in " ".join(card.headline), "a decision is about money"
+
+
+def test_being_down_while_ahead_on_everything_is_named_as_the_question(stats):
+    """The tension is the thought; the four numbers alone were not."""
+    card = build_card("REGN", Market.US, FUNDAMENTALS, _Price(vs200=8.0),
+                      sector="Tech", weight=0.08, since_entry_pct=-24.0,
+                      ceiling=0.10)
+    # FUNDAMENTALS is behind on margin, so force the all-ahead case.
+    strong = Fundamentals(symbol="REGN", sector="Tech", revenue_growth=0.17,
+                          profit_margin=0.28, pe_ratio=19.0)
+    card = build_card("REGN", Market.US, strong, _Price(vs200=8.0), sector="Tech",
+                      weight=0.08, since_entry_pct=-24.0, ceiling=0.10)
+
+    assert card.tally == "4/4 ahead"
+    assert "disagree" in card.tension
+
+
+def test_a_long_downtrend_on_a_cheap_name_is_posed_as_a_question(stats):
+    cheap = Fundamentals(symbol="ADBE", sector="Tech", revenue_growth=0.13,
+                         profit_margin=0.29, pe_ratio=14.0)
+    card = build_card("ADBE", Market.US, cheap, _Price(vs200=-9.0), sector="Tech",
+                      weight=0.06, since_entry_pct=-44.0, ceiling=0.10,
+                      weeks_below_ma=40)
+
+    assert "40 weeks below" in card.tension
+    assert card.tension.endswith("?"), "a question, never an instruction"
+
+
+def test_the_tension_line_never_becomes_advice(stats):
+    """Naming what is in tension is not the same as resolving it."""
+    for since, weight, weeks in ((308.0, 0.273, None), (-24.0, 0.08, None),
+                                 (-44.0, 0.06, 40), (-29.0, 0.07, 1)):
+        card = build_card("X", Market.US, FUNDAMENTALS, _Price(vs200=-2.0),
+                          sector="Tech", weight=weight, since_entry_pct=since,
+                          ceiling=0.10, weeks_below_ma=weeks)
+        lowered = card.tension.lower()
+        for word in ("sell", "buy", "trim", "should", "recommend"):
+            assert word not in lowered, f"{word!r} in: {card.tension}"
+
+
+def test_the_market_reference_caveat_is_stated_once_not_once_per_card(stats,
+                                                                     tmp_path,
+                                                                     monkeypatch):
+    """Nine identical paragraphs buried the numbers they existed to qualify."""
+    path = tmp_path / "sector_stats_US.json"
+    path.write_text(json.dumps({"market": "US", "sectors": {}, "overall": {
+        "pe_ratio": {"median": 21.0, "n": 484, "values": [21.0]}}}))
+    monkeypatch.setattr(interpret, "STATS_DIR", tmp_path)
+    monkeypatch.setattr(interpret, "STATS", tmp_path / "absent.json")
+
+    cards = [build_card(s, Market.US, Fundamentals(symbol=s, sector="Tech",
+                                                   pe_ratio=30.0),
+                        sector="Tech", weight=0.1) for s in ("A", "B", "C")]
+    text = format_positions(cards, {"Nothing has broken": cards}, [])
+
+    assert text.count("mixes industries") == 1
+
+
+def test_an_impossible_beta_is_dropped_rather_than_printed(stats):
+    """Yahoo returns 0.0 for BIST names; that is a missing value, not low beta."""
+    f = Fundamentals(symbol="BIMAS", sector="Tech", profit_margin=0.03, beta=0.0)
+    assert not any("beta" in a for a in build_card("BIMAS", Market.BIST, f).also)
+
+    real = Fundamentals(symbol="X", sector="Tech", profit_margin=0.03, beta=1.4)
+    assert any("beta 1.4" in a for a in build_card("X", Market.US, real).also)

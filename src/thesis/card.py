@@ -71,6 +71,12 @@ class Card:
     # rather than parsing the rendered strings back out.
     weight: float | None = None
     has_thesis: bool = False
+    # The one sentence that makes this position a decision rather than a row.
+    # Derived mechanically from facts already on the card — never advice.
+    tension: str = ""
+    # True when the comparisons came from the whole market rather than peers,
+    # so the reader is told once at the top instead of nine times.
+    market_reference: bool = False
 
     @property
     def ahead(self) -> list[Fact]:
@@ -151,6 +157,8 @@ def build_card(
     cap_usd: float | None = None,
     institutional: float | None = None,
     crowded_sector_weight: float | None = None,
+    ceiling: float | None = None,
+    value_try: float | None = None,
 ) -> Card:
     """Assemble the block. Identical arguments produce an identical card.
 
@@ -171,6 +179,10 @@ def build_card(
 
     if cap_usd:
         card.headline.append(f"cap {cap_usd / 1e9:,.2f}B")
+    if value_try is not None:
+        # Percentages alone are hard to weigh a decision against; the amount of
+        # actual money in a position is what the decision is about.
+        card.headline.append(f"{value_try:,.0f} TRY")
     if weight is not None:
         card.headline.append(f"{weight * 100:.1f}% of the book")
     if since_entry_pct is not None:
@@ -200,7 +212,11 @@ def build_card(
             card.also.append(f"12m {price.momentum_12_1_pct:+.0f}%")
         if price.worst_drawdown_pct is not None:
             card.also.append(f"worst fall {price.worst_drawdown_pct:.0f}%")
-    if fundamentals.beta is not None:
+    # A beta of 0.0 on an equity is not a low-beta stock, it is a missing value
+    # the source rendered as a number — Yahoo does this routinely for BIST. It
+    # showed up as "beta 0.0" and "beta -0.0" next to real readings, which is
+    # worse than showing nothing.
+    if fundamentals.beta is not None and abs(fundamentals.beta) >= 0.05:
         card.also.append(f"beta {fundamentals.beta:.1f}")
     if institutional is not None:
         card.also.append(f"institutions {institutional * 100:.0f}%")
@@ -211,18 +227,56 @@ def build_card(
             "which is the weakest reference here"
         )
     elif reference_kind == "market":
-        card.warnings.append(
-            f"no peer sample in {sector} — compared against the whole market, "
-            f"which mixes industries: read it as a level, not as "
-            f"\"better than its peers\""
-        )
-    if thesis_summary is None and weight is not None:
-        card.warnings.append(
-            "no thesis on record — nothing can be monitored, nothing will alert you"
-        )
+        # Flagged, not spelled out per card. Nine identical paragraphs of caveat
+        # buried the numbers they were meant to qualify; the reader is told once.
+        card.market_reference = True
     if crowded_sector_weight:
         card.warnings.append(
             f"you already hold {crowded_sector_weight * 100:.0f}% in {sector}"
         )
 
+    card.tension = _tension(card, since_entry_pct, ceiling, weeks_below_ma)
     return card
+
+
+def _tension(card: Card, since: float | None, ceiling: float | None,
+             weeks_below: float | None) -> str:
+    """Name why this position is a decision, using only what is already shown.
+
+    A page of figures is not a thought. The figures were all there — 27.3% of
+    the book, up 308%, ahead on two of four — and the reader still could not say
+    what any of it meant, because nothing put two of them next to each other.
+    This does exactly that and stops: it never says buy, sell or hold, and every
+    branch is a restatement of numbers on the same card.
+    """
+    weight, ahead, behind = card.weight, len(card.ahead), len(card.behind)
+
+    if weight is not None and ceiling and weight > ceiling:
+        over = f"{weight * 100:.0f}% of the book against a {ceiling * 100:.0f}% ceiling"
+        if since is not None and since > 100:
+            return (f"{over} — it got there by rising {since:+.0f}%, not by being "
+                    f"sized there. Deciding to keep that weight is a separate "
+                    f"decision from having bought it.")
+        return f"{over}. One position failing takes that much of the book with it."
+
+    if since is not None and since < -10 and behind == 0 and ahead >= 3:
+        return (f"Down {since:+.0f}% while ahead on every measure shown. The "
+                f"market and these numbers disagree — the question is which of "
+                f"them knows something the other does not.")
+
+    if since is not None and since < -20 and behind >= ahead:
+        return (f"Down {since:+.0f}% and behind on {behind} of {ahead + behind}. "
+                f"Nothing on this card argues for it except that you already "
+                f"own it.")
+
+    if weeks_below and weeks_below >= 26 and ahead >= 2:
+        return (f"{weeks_below:.0f} weeks below its own 200-day average while "
+                f"still ahead on {ahead} of {ahead + behind}. Cheap because the "
+                f"business changed, or cheap because the price did?")
+
+    if since is not None and since > 100 and weight is not None and weight > 0.10:
+        return (f"Up {since:+.0f}% and now {weight * 100:.0f}% of the book. "
+                f"Nothing is wrong with it — that is exactly when position size "
+                f"stops being an accident and becomes a choice.")
+
+    return ""

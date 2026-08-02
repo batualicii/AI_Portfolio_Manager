@@ -114,3 +114,28 @@ def test_the_suggested_command_is_ready_to_send():
 def test_a_name_with_no_data_at_all_still_produces_a_usable_line():
     command = suggested_command("X", Market.US, 45.0, 3, "why", [])
     assert "trend:200/4" in command   # never an empty falsifier list
+
+
+def test_a_holiday_gap_never_renders_as_trend_nan():
+    """Every BIST position printed "trend +nan%": one empty close inside the
+    200-day window makes the rolling mean NaN, and NaN reached the page as
+    though it were a reading."""
+    import math
+
+    import pandas as pd
+
+    from src.models import Market
+    from src.thesis.brief import build_brief
+    from tests.conftest import FakeProvider, uptrend
+
+    bars = uptrend(400)
+    provider = FakeProvider(history={("THYAO", Market.BIST): bars})
+
+    # Blank the most recent close, as Yahoo does on a Turkish market holiday.
+    frame = provider.get_history("THYAO", Market.BIST)
+    frame[-1] = frame[-1].__class__(**{**frame[-1].__dict__, "close": float("nan")})
+    provider.set_history("THYAO", Market.BIST, frame)
+
+    price = build_brief("THYAO", Market.BIST, provider, period="2y").price
+    assert price is not None
+    assert price.vs_200d_pct is None or not math.isnan(price.vs_200d_pct)

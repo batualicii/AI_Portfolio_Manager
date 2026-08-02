@@ -551,6 +551,13 @@ class PortfolioBot:
                 weight=weight,
                 since_entry_pct=since,
                 thesis_summary=thesis.summary if thesis else None,
+                value_try=values.get(key),
+                # Without a thesis there is no stated conviction, so the ceiling
+                # applied is the one for the default level rather than the most
+                # permissive — an unexamined position does not get the size
+                # reserved for the ideas you were most sure about.
+                ceiling=(max_weight_for(thesis.conviction) if thesis
+                         else CONVICTION_CEILING[3]),
             )
             cards.append(card)
             sector_weights[card.sector] = sector_weights.get(card.sector, 0.0) + weight
