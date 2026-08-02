@@ -237,3 +237,68 @@ def test_a_fired_falsifier_produces_one_alert_and_is_logged(bot):
     assert "conditions you wrote at purchase" in messages[0] or \
            "condition you wrote at purchase" in messages[0]
     assert [e["kind"] for e in store.thesis_events(tid)][0] == "FIRED"
+
+
+def test_positions_group_by_what_changed_never_by_what_to_do(bot, tmp_path):
+    """Grouping is factual. "Sell these" is the rule this design removed."""
+    from src.market.types import Fundamentals
+    from src.models import Holding, Market
+    from tests.conftest import downtrend, uptrend
+
+    portfolio_bot, store = bot
+    provider = portfolio_bot._provider
+    for symbol, bars in (("UP", uptrend(400)), ("DOWN", downtrend(400))):
+        provider.set_history(symbol, Market.US, bars)
+        provider._fundamentals[(symbol, Market.US)] = Fundamentals(
+            symbol=symbol, sector="Tech", revenue_growth=0.2, profit_margin=0.1,
+            pe_ratio=20.0)
+        store.upsert_holding(Holding(symbol=symbol, market=Market.US,
+                                     quantity=10, avg_cost=100.0))
+
+    cards, groups, summary = portfolio_bot._position_cards(store.list_holdings())
+
+    assert {c.symbol for c in groups["Nothing has broken"]} == {"UP"}
+    assert {c.symbol for c in groups["Something changed"]} == {"DOWN"}
+    assert "0/2 with a thesis" in summary
+
+
+def test_positions_are_ordered_by_weight_not_by_alphabet(bot):
+    """The biggest exposure is the one worth reading first."""
+    from src.market.types import Fundamentals
+    from src.models import Holding, Market
+    from tests.conftest import uptrend
+
+    portfolio_bot, store = bot
+    for symbol, qty in (("AAA", 1), ("ZZZ", 100)):
+        portfolio_bot._provider.set_history(symbol, Market.US, uptrend(400))
+        portfolio_bot._provider._fundamentals[(symbol, Market.US)] = Fundamentals(
+            symbol=symbol, sector="Tech")
+        store.upsert_holding(Holding(symbol=symbol, market=Market.US,
+                                     quantity=qty, avg_cost=100.0))
+
+    _, groups, _ = portfolio_bot._position_cards(store.list_holdings())
+    intact = groups["Nothing has broken"]
+    assert [c.symbol for c in intact] == ["ZZZ", "AAA"]
+
+
+def test_the_pool_is_served_from_storage_rather_than_rescanned(bot):
+    """Six hundred names is minutes of calls; a command cannot hold that open."""
+    import inspect
+
+    from src.bot import telegram_bot
+
+    source = inspect.getsource(telegram_bot.PortfolioBot._pool)
+    assert "build_pool_cards" in source
+    # A rescan happens only when the owner explicitly asks for one.
+    assert 'if "REFRESH" in args' in source
+
+
+def test_the_pool_is_scanned_weekly_but_delivered_monthly(bot):
+    """A fresh list of twenty names every week manufactures trades."""
+    import inspect
+
+    from src.bot import telegram_bot
+
+    source = inspect.getsource(telegram_bot.PortfolioBot._on_startup)
+    assert 'name="pool_scan"' in source and 'day_of_week="sat"' in source
+    assert 'name="monthly_pool"' in source and "day=1" in source

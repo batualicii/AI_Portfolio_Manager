@@ -97,7 +97,41 @@ CREATE TABLE IF NOT EXISTS thesis_events (
 );
 
 CREATE INDEX IF NOT EXISTS idx_event_thesis ON thesis_events (thesis_id, created_at);
+
+-- The research pool, as screened. Six hundred names take minutes to sweep, so
+-- the scan runs on a schedule and /pool serves the last result instantly. Runs
+-- are kept rather than overwritten: comparing the newest against the previous
+-- one is what lets the pool say which names are new, and a list that cannot say
+-- that reads as twenty fresh ideas every time it is opened.
+CREATE TABLE IF NOT EXISTS pool_candidates (
+    built_at        TEXT NOT NULL,
+    market          TEXT NOT NULL,
+    rank            INTEGER NOT NULL,
+    symbol          TEXT NOT NULL,
+    sector          TEXT NOT NULL DEFAULT '',
+    cap_usd         REAL,
+    daily_value_usd REAL,
+    institutional   REAL,
+    momentum        REAL,
+    trend_ok        INTEGER NOT NULL DEFAULT 0,
+    vs_200d         REAL,
+    price           REAL,
+    revenue_growth  REAL,
+    profit_margin   REAL,
+    pe_ratio        REAL,
+    beta            REAL,
+    worst_drawdown  REAL,
+    PRIMARY KEY (built_at, market, symbol)
+);
+
+CREATE INDEX IF NOT EXISTS idx_pool_run ON pool_candidates (market, built_at);
 """
+
+_POOL_FIELDS = (
+    "symbol", "sector", "cap_usd", "daily_value_usd", "institutional",
+    "momentum", "trend_ok", "vs_200d", "price", "revenue_growth", "profit_margin",
+    "pe_ratio", "beta", "worst_drawdown",
+)
 
 
 class Store:
@@ -403,6 +437,76 @@ class Store:
             reason if explained else f"UNEXPLAINED — no falsifier fired: {reason}",
             when,
         )
+
+    # ------------------------------ pool -------------------------------
+
+    def save_pool(self, market: Market, candidates, when: datetime | None = None,
+                  keep_runs: int = 6) -> str:
+        """Record one screen. Returns the run's timestamp.
+
+        Older runs are pruned to `keep_runs`, but never to one: the previous run
+        is what makes "new since last time" answerable, and without it every
+        opening of the pool looks like a fresh set of ideas.
+        """
+        stamp = (when or datetime.now(timezone.utc)).isoformat()
+        rows = [
+            (stamp, market.value, rank,
+             *(getattr(c, f) if f != "trend_ok" else int(c.trend_ok)
+               for f in _POOL_FIELDS))
+            for rank, c in enumerate(candidates, 1)
+        ]
+        with self._lock:
+            self._conn.executemany(
+                f"INSERT OR REPLACE INTO pool_candidates "
+                f"(built_at, market, rank, {', '.join(_POOL_FIELDS)}) "
+                f"VALUES ({', '.join('?' * (3 + len(_POOL_FIELDS)))})",
+                rows,
+            )
+            keep = [r["built_at"] for r in self._conn.execute(
+                "SELECT DISTINCT built_at FROM pool_candidates WHERE market = ? "
+                "ORDER BY built_at DESC LIMIT ?", (market.value, max(keep_runs, 2))
+            )]
+            if keep:
+                self._conn.execute(
+                    f"DELETE FROM pool_candidates WHERE market = ? AND built_at "
+                    f"NOT IN ({', '.join('?' * len(keep))})",
+                    (market.value, *keep),
+                )
+            self._conn.commit()
+        return stamp
+
+    def pool_runs(self, market: Market, limit: int = 2) -> list[str]:
+        """Timestamps of the most recent screens, newest first."""
+        with self._lock:
+            return [r["built_at"] for r in self._conn.execute(
+                "SELECT DISTINCT built_at FROM pool_candidates WHERE market = ? "
+                "ORDER BY built_at DESC LIMIT ?", (market.value, limit)
+            )]
+
+    def pool(self, market: Market, built_at: str | None = None) -> list[dict]:
+        """One screen's rows, in rank order. Empty when nothing was ever run."""
+        if built_at is None:
+            runs = self.pool_runs(market, limit=1)
+            if not runs:
+                return []
+            built_at = runs[0]
+        with self._lock:
+            rows = self._conn.execute(
+                f"SELECT built_at, rank, {', '.join(_POOL_FIELDS)} "
+                f"FROM pool_candidates WHERE market = ? AND built_at = ? "
+                f"ORDER BY rank",
+                (market.value, built_at),
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    def new_in_pool(self, market: Market) -> set[str]:
+        """Symbols in the newest screen that the one before it did not have."""
+        runs = self.pool_runs(market, limit=2)
+        if len(runs) < 2:
+            return set()
+        latest = {r["symbol"] for r in self.pool(market, runs[0])}
+        previous = {r["symbol"] for r in self.pool(market, runs[1])}
+        return latest - previous
 
     def unexplained_closures(self, since: datetime | None = None) -> int:
         """How often a position was sold with nothing having actually broken."""

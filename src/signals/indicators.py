@@ -72,6 +72,29 @@ def sustained_below_ma(
     return bool(recent.all())
 
 
+def bars_below_ma(close: pd.Series, ma_window: int = 200) -> int | None:
+    """How many closes in a row, right now, sit below the moving average.
+
+    `sustained_below_ma` answers a yes/no a falsifier can fire on. This answers
+    "how long has it been like this", which is what a human reading a position
+    wants — the difference between a three-day dip and a six-week one. Same
+    moving average, so the two can never disagree about what "below" means.
+
+    None when there is not enough history, never 0: "not measured" and "it is
+    above the average today" are different statements.
+    """
+    if len(close) < ma_window:
+        return None
+    avg = sma(close, ma_window)
+    below = (close < avg).iloc[-ma_window:]
+    count = 0
+    for value in reversed(below.tolist()):
+        if not value:
+            break
+        count += 1
+    return count
+
+
 def rsi(close: pd.Series, window: int = 14) -> pd.Series:
     """Wilder's RSI in [0, 100]."""
     delta = close.diff()

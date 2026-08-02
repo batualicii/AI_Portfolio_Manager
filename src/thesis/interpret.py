@@ -109,6 +109,22 @@ def _load_stats() -> dict:
         return {}
 
 
+def sector_medians(sector: str | None, market: Market | None = None) -> dict:
+    """`{field: {"median": …, "n": …}}` for a sector, or `{}` when there is none.
+
+    Empty is the honest answer for a whole market: BIST has no medians and will
+    not acquire any, so callers branch on emptiness rather than being handed
+    US figures that would look like peers and are not.
+    """
+    stats = _load_stats()
+    if not stats:
+        return {}
+    built_for = stats.get("market")
+    if market is not None and built_for and built_for != market.value:
+        return {}
+    return stats.get("sectors", {}).get(sector or "", {})
+
+
 def peer_coverage(sector: str | None, market: Market | None = None) -> str | None:
     """Why this name has no peer context, when it has none.
 
@@ -157,9 +173,10 @@ def peer_coverage(sector: str | None, market: Market | None = None) -> str | Non
     return None
 
 
-def read_fundamentals(f: Fundamentals, sector: str | None = None) -> list[Reading]:
+def read_fundamentals(f: Fundamentals, sector: str | None = None,
+                      market: Market | None = None) -> list[Reading]:
     """Turn raw fields into readable observations with peer context."""
-    stats = _load_stats().get("sectors", {}).get(sector or "", {})
+    stats = sector_medians(sector, market)
     out: list[Reading] = []
 
     for field, pct in (("revenue_growth", True), ("profit_margin", True),

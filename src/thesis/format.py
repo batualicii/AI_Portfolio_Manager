@@ -246,6 +246,87 @@ def format_brief(brief, suggestions, questions,
     return "\n".join(lines)
 
 
+def _card_block(card, prefix: str = "", suffix: str = "") -> list[str]:
+    """One name, four lines. The same four lines whether you own it or not."""
+    head = f"{prefix}*{escape_md(card.symbol)}* · {escape_md(card.sector)}"
+    if card.headline:
+        head += " · " + escape_md(" · ".join(card.headline))
+    head += suffix
+    lines = [head, f"    _{escape_md(card.tally)}_"]
+
+    for label, facts in (("ahead", card.ahead), ("behind", card.behind),
+                         ("no ref", card.uncompared)):
+        if facts:
+            joined = " · ".join(f.render() for f in facts)
+            lines.append(f"    `{label:<6}` {escape_md(joined)}")
+    if card.also:
+        lines.append(f"    `{'also':<6}` {escape_md(' · '.join(card.also))}")
+    for warning in card.warnings:
+        lines.append(f"    ⚠️ {escape_md(warning)}")
+    return lines
+
+
+def format_positions(cards, groups: dict[str, list], summary: list[str]) -> str:
+    """Every holding, grouped by what has changed — never by what to do.
+
+    The grouping is factual: a trend either is or is not broken. It stops short
+    of "sell" deliberately. The rotation rule this repo tested would have sold
+    NVDA after a 56% fall in 2018 and again after 66% in 2022, which is to say
+    it would have sold precisely the drawdowns that had to be survived. A bot
+    saying "sell" would reinstate that rule through the interface.
+    """
+    lines = [f"🧾 *Positions — {datetime.now():%d %b %Y}*", ""]
+    if summary:
+        lines += [escape_md(" · ".join(summary)), ""]
+
+    for title, group in groups.items():
+        if not group:
+            continue
+        lines.append(f"── *{escape_md(title)}* ({len(group)}) ──")
+        lines.append("")
+        for card in group:
+            lines += _card_block(card)
+            lines.append("")
+
+    lines.append(escape_md(
+        "Nothing here says sell. It says what changed, next to what you wrote "
+        "down — and for anything with no thesis, that column is empty because "
+        "you never filled it. /draft turns a rough sentence into one."
+    ))
+    return "\n".join(lines)
+
+
+def format_pool(cards, market: str, built_at: str, new_symbols=None,
+                footer: str = "") -> str:
+    """The research queue, in the same words the portfolio is described in."""
+    plural = "name" if len(cards) == 1 else "names"
+    lines = [f"🎣 *Research pool — {escape_md(market)}*",
+             escape_md(f"{len(cards)} {plural} · screened {built_at}"), ""]
+
+    new_symbols = set(new_symbols or ())
+    for i, card in enumerate(cards, 1):
+        suffix = " 🆕" if card.symbol in new_symbols else ""
+        lines += _card_block(card, prefix=f"{i}. ", suffix=suffix)
+        lines.append("")
+
+    if new_symbols:
+        n = len(new_symbols)
+        lines.append(escape_md(
+            f"🆕 marks the {n} {'name' if n == 1 else 'names'} that "
+            f"{'was' if n == 1 else 'were'} not in the previous screen. The rest "
+            f"were already here last time — the list changes slowly, and that is "
+            f"the honest shape of it."))
+    if footer:
+        lines.append(escape_md(footer))
+    lines.append(escape_md(
+        "Ordered by momentum, which decides reading order and nothing else — "
+        "this repo measured that a price ranking cannot be validated at this "
+        "size. These are names to read, not to buy. When you do buy, write the "
+        "thesis first: /draft, then /thesis add."
+    ))
+    return "\n".join(lines)
+
+
 def format_audit(rows) -> str:
     """Every position, with the one question that decides it.
 

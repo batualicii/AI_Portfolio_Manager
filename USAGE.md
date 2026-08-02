@@ -83,22 +83,91 @@ falsifier check only fire while the process is alive.
 
 ## The loop
 
-### Finding something to look at
+### Seeing where you stand
+
+```
+/positions
+```
+
+Every holding in one message, grouped by what has actually changed:
+
+```
+🧾 Positions — 04 Aug 2026
+9 positions · 108,557 TRY · top two 46% · Info Technology 32% · 0/9 with a thesis
+
+── Nothing has broken (5) ──
+
+BIMAS · Consumer Staples · 11.4% of the book · since entry +23%
+    3/4 ahead
+    ahead  growth +31% (fixed line +5%, no sector median) · trend +9% …
+    also   12m +18% · worst fall −27%
+    ⚠️ no sector medians for this market — compared against fixed lines
+    ⚠️ no thesis on record — nothing can be monitored, nothing will alert you
+
+── Something changed (3) ──
+
+SWKS · Info Technology · 7.2% of the book · since entry −14%
+    1/4 ahead
+    ahead  margin +9% (sector +4%, n=64)
+    behind growth +4% (sector +8%, n=64) · P/E 41 (sector 39, n=64) ·
+           trend −8% (its own 200-day average, 6 weeks below)
+    also   12m −21% · worst fall −52%
+```
+
+A position lands in **Something changed** when a falsifier you wrote has fired,
+or when it has closed below its 200-day average for twenty straight sessions.
+Both are facts, and neither is an instruction.
+
+**It will not tell you to sell.** That is not squeamishness — the momentum
+rotation rule measured in this repo would have sold NVDA after a 56% fall in
+2018 and again after 66% in 2022, which is to say it would have sold exactly the
+drawdowns that had to be survived. What the group gives you is the shortlist
+worth thinking about.
+
+### Finding something to replace it with
+
+```
+/pool US
+/pool BIST
+/pool US refresh      # rescan now — a few minutes
+```
+
+Six hundred names become twenty, filtered on **size** (small enough that large
+funds structurally cannot be there), **liquidity** (large enough that you can get
+out), and **crowding** (institutions have not already piled in), capped at three
+per sector.
+
+The scan runs by itself every Saturday and the result is stored, so `/pool`
+answers instantly and tells you when it was screened. You get it unprompted once
+a month, on the 1st, with 🆕 against the names that were not in the previous
+screen. Weekly delivery was considered and rejected: a fresh list of twenty every
+week is a machine for producing trades, and rising trading is the one thing here
+measured as reliably harmful to a retail account.
+
+**Candidates are described in exactly the same words as your holdings** — same
+four facts, same references, same layout, from the same code. That is deliberate.
+Written up more generously than what you already own, the new name always looks
+better; described identically, it only looks better when it is.
+
+`ahead` and `behind` are per-metric comparisons against a named reference, not a
+verdict, and `3/4 ahead` counts them rather than scoring the company. The
+ordering is momentum, which this repo measured and cannot validate — it decides
+reading order and nothing else.
+
+Run `/positions` first in a session and the pool will also flag candidates in
+sectors you are already heavy in. It flags rather than filters: hiding a good
+name to protect you from yourself is a worse trade than telling you the truth.
+
+The terminal version still exists, and prints the sector-mix diagnostics the
+Telegram one leaves out:
 
 ```
 python -m scripts.screen_candidates US
 python -m scripts.screen_candidates BIST
 ```
 
-Six hundred names become a few dozen, filtered on **size** (small enough that
-large funds structurally cannot be there), **liquidity** (large enough that you
-can get out), and **crowding** (institutions have not already piled in).
-
-It is a reading list. The ordering is momentum, which this repo has measured and
-cannot validate — it decides what to read first and nothing else.
-
-Read the sector-mix line it prints. Filters are not sector-neutral, and the
-ownership one favours small banks and REITs for structural reasons.
+Filters are not sector-neutral, and the ownership one favours small banks and
+REITs for structural reasons.
 
 ### Researching one name
 
@@ -195,6 +264,8 @@ can. A position you cannot write a thesis for has already answered it.
 
 | Command | What it does |
 |---|---|
+| `/positions` | every holding, grouped by what changed |
+| `/pool US` | the research queue, in the same words |
 | `/thesis` | list your open theses |
 | `/thesis ASTH` | one thesis, with every condition's current state |
 | `/audit` | every holding, with the question that decides it |
@@ -205,10 +276,11 @@ can. A position you cannot write a thesis for has already answered it.
 | `/digest` | the weekly summary on demand |
 | `/add`, `/remove`, `/holdings`, `/value` | keep positions in sync with Midas |
 
-**What arrives on its own:** a summary on Sundays, and nothing else unless a
-falsifier fires. The daily check runs silently. On a multi-year horizon there is
-nothing new to say most mornings, and a bot that messages you daily teaches you
-to stop reading it.
+**What arrives on its own:** a summary on Sundays, the research pool on the 1st
+of each month, and nothing else unless a falsifier fires. The daily falsifier
+check and the weekly pool scan both run silently. On a multi-year horizon there
+is nothing new to say most mornings, and a bot that messages you daily teaches
+you to stop reading it.
 
 **When you sell**, `/close` runs your falsifiers first and tells you which of
 three situations you are in: something fired (the system working), nothing fired

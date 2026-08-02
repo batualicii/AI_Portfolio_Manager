@@ -122,7 +122,20 @@ falsifier**, never as a reason to buy or sell on their own.
   multi-year horizon there is nothing new to say most mornings.
 - **Immediate alert** whenever a falsifier fires — the one event that genuinely cannot
   wait, and the only thing that interrupts the user.
-- No ranked buy/sell list. That output is what the new design exists to remove.
+- **Research pool** (`/pool`): the screen's reading list, scanned weekly in the
+  background, served instantly from storage, and delivered unprompted only on the 1st
+  of the month with new entrants marked. Weekly delivery was considered and rejected —
+  twenty fresh names every week is a trade generator, and Barber & Odean is the one
+  finding here that does not depend on this repo's own measurements.
+- **One renderer for holdings and candidates** (`src/thesis/card.py`). Both sides show
+  the same four facts against the same references in the same layout. This is a
+  behavioural constraint, not a formatting preference: described more generously than
+  what the user already owns, a candidate always looks better, and the resulting
+  churn is precisely what section 0 was rewritten to avoid. A test asserts the two
+  renders are byte-identical for identical inputs.
+- No ranked buy/sell list, and `/positions` never says sell. Grouping positions by
+  *what changed* is a statement of fact; grouping them by *what to do* would reinstate
+  the quarterly rotation rule (section 0) through the interface.
 
 ## 5. Tech / hosting
 - Python service running 24/7 on a small cloud VPS.

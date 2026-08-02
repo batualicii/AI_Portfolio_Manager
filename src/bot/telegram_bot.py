@@ -50,13 +50,18 @@ from src.portfolio.guardrails import (
 )
 from src.portfolio.valuation import ValuationService
 from src.reasoning.narrator import ClaudeNarrator
+from src.signals import indicators as ind
 from src.signals.engine import SignalEngine
 from src.storage.db import Store
 from src.thesis.brief import OPEN_QUESTIONS, build_brief
+from src.screen.pool import build_pool_cards, refresh_pool
+from src.thesis.card import build_card
 from src.thesis.format import (
     format_alert,
     format_audit,
     format_brief,
+    format_pool,
+    format_positions,
     format_thesis,
     format_weekly,
 )
@@ -126,9 +131,26 @@ class PortfolioBot:
             name="falsifier_watch",
             misfire_grace_time=3600,
         )
+        # Scanned weekly so /pool is never stale, delivered monthly so it is not
+        # a trading trigger. A fresh list of twenty names every week is a machine
+        # for manufacturing trades, and the one thing this repo can state with
+        # confidence is that retail returns fall as trading rises.
+        self._scheduler.add_job(
+            self._scan_pool,
+            CronTrigger(day_of_week="sat", hour=3, minute=0, timezone=tz),
+            name="pool_scan",
+            misfire_grace_time=6 * 3600,
+        )
+        self._scheduler.add_job(
+            self._monthly_pool,
+            CronTrigger(day=1, hour=hh, minute=mm, timezone=tz),
+            name="monthly_pool",
+            misfire_grace_time=6 * 3600,
+        )
         self._scheduler.start()
         log.info(
-            "Weekly summary Sundays %02d:%02d %s; silent falsifier check daily",
+            "Weekly summary Sundays %02d:%02d %s; silent falsifier check daily; "
+            "pool screened Saturdays, delivered monthly",
             hh, mm, self._settings.digest_timezone,
         )
 
@@ -156,6 +178,10 @@ class PortfolioBot:
         self._app.add_handler(CommandHandler("check", self._owner_only(self._check)))
         self._app.add_handler(CommandHandler("brief", self._owner_only(self._brief)))
         self._app.add_handler(CommandHandler("audit", self._owner_only(self._audit)))
+        self._app.add_handler(
+            CommandHandler("positions", self._owner_only(self._positions))
+        )
+        self._app.add_handler(CommandHandler("pool", self._owner_only(self._pool)))
         self._app.add_handler(CommandHandler("draft", self._owner_only(self._draft)))
         self._app.add_handler(CommandHandler("digest", self._owner_only(self._digest_now)))
         self._app.add_handler(CommandHandler("log", self._owner_only(self._log)))
@@ -213,6 +239,9 @@ class PortfolioBot:
             "*Positions*\n"
             "`/add US AAPL 10 185.50` · `/remove US AAPL` · `/holdings` · `/value`\n\n"
             "*Research*\n"
+            "`/positions` — every holding, grouped by what has actually changed\n"
+            "`/pool US` — the research queue, in the same words as your holdings\n"
+            "`/pool US refresh` — rescan now (minutes)\n"
             "`/brief US ASTH` — everything knowable about a name, on one page\n"
             "`/audit` — every position you hold, and the question that decides it\n"
             "`/draft US ASTH 45 3 <rough thoughts>` — turns them into a ready line\n\n"
@@ -226,7 +255,9 @@ class PortfolioBot:
             "`/digest` — the weekly summary now · `/log` — older signal history\n\n"
             f"_Weekly summary Sundays at {self._settings.digest_time} "
             f"{self._settings.digest_timezone}. Falsifiers are checked daily and "
-            "you only hear about it if one fires._",
+            "you only hear about it if one fires. The pool is rescanned weekly "
+            "but only sent on the 1st — a fresh list every week is a trading "
+            "trigger, not information._",
             parse_mode=ParseMode.MARKDOWN,
         )
 
@@ -352,7 +383,7 @@ class PortfolioBot:
         except Exception:  # noqa: BLE001 — cosmetic only
             pass
         sector = brief.fundamentals.sector
-        readings = read_fundamentals(brief.fundamentals, sector)
+        readings = read_fundamentals(brief.fundamentals, sector, market)
         checks = quality_checklist(brief.fundamentals, brief.price)
         await self._send_to_owner(
             format_brief(brief, suggestions, OPEN_QUESTIONS, readings, checks,
@@ -425,6 +456,154 @@ class PortfolioBot:
             })
         rows.sort(key=lambda r: r["weight"], reverse=True)
         return rows
+
+    # ------------------- positions & pool, one renderer ------------------
+
+    async def _positions(self, update: Update, _: ContextTypes.DEFAULT_TYPE) -> None:
+        """/positions — every holding, grouped by what has actually changed."""
+        holdings = self._store.list_holdings()
+        if not holdings:
+            await update.effective_message.reply_text(
+                "No positions recorded. `/add US AAPL 10 185.50` first.",
+                parse_mode=ParseMode.MARKDOWN)
+            return
+
+        note = await update.effective_message.reply_text(
+            f"Reading {len(holdings)} positions…")
+        cards, groups, summary = await asyncio.to_thread(
+            self._position_cards, holdings)
+        try:
+            await note.delete()
+        except Exception:  # noqa: BLE001 — cosmetic only
+            pass
+        await self._send_to_owner(format_positions(cards, groups, summary))
+
+    def _position_cards(self, holdings):
+        """Blocking: one card per holding, plus the grouping and the totals."""
+        report = self._valuation.value(holdings)
+        rate = report.usdtry or 1.0
+        values, total = {}, 0.0
+        prices = {}
+        for p in report.positions:
+            key = (p.holding.symbol.upper(), p.holding.market)
+            prices[key] = p.price
+            if p.market_value is None:
+                continue
+            in_try = (p.market_value * rate
+                      if p.holding.market is Market.US else p.market_value)
+            values[key] = in_try
+            total += in_try
+
+        cards, unreadable, changed, intact = [], [], [], []
+        sector_weights: dict[str, float] = {}
+
+        for holding in holdings:
+            key = (holding.symbol.upper(), holding.market)
+            weight = values.get(key, 0.0) / total if total else 0.0
+            thesis = self._store.get_thesis(holding.symbol, holding.market)
+            # Same window the screen reads, so a holding and a candidate are not
+            # quietly being described over different stretches of history.
+            brief = build_brief(holding.symbol, holding.market, self._provider,
+                                news=None, period="2y")
+
+            weeks_below = None
+            broken = None
+            try:
+                bars = self._provider.get_history(
+                    holding.symbol, holding.market, period="2y")
+                close = ind.bars_to_frame(bars)["close"]
+                below = ind.bars_below_ma(close, 200)
+                weeks_below = below / 5 if below else None
+                broken = ind.sustained_below_ma(close, 200, 20)
+            except Exception:  # noqa: BLE001 — absence stays absence
+                pass
+
+            price = prices.get(key)
+            since = ((price / holding.avg_cost - 1.0) * 100
+                     if price and holding.avg_cost else None)
+
+            card = build_card(
+                holding.symbol, holding.market, brief.fundamentals, brief.price,
+                sector=brief.fundamentals.sector,
+                weeks_below_ma=weeks_below,
+                weight=weight,
+                since_entry_pct=since,
+                thesis_summary=thesis.summary if thesis else None,
+            )
+            cards.append(card)
+            sector_weights[card.sector] = sector_weights.get(card.sector, 0.0) + weight
+
+            fired_now = []
+            if thesis is not None:
+                fired_now = fired(self._monitor.check(thesis))
+                for check in fired_now:
+                    card.warnings.append(f"fired: {check.falsifier.text}")
+
+            if brief.price is None:
+                unreadable.append(card)
+            elif fired_now or broken:
+                changed.append(card)
+            else:
+                intact.append(card)
+
+        groups = {
+            "Nothing has broken": intact,
+            "Something changed": changed,
+            "Could not be read": unreadable,
+        }
+        for group in groups.values():
+            group.sort(key=lambda c: c.weight or 0.0, reverse=True)
+
+        summary = [f"{len(holdings)} positions"]
+        if total:
+            summary.append(f"{total:,.0f} TRY")
+        ranked = sorted(c.weight or 0.0 for c in cards)
+        if len(ranked) >= 2:
+            summary.append(f"top two {sum(ranked[-2:]) * 100:.0f}%")
+        heaviest = max(sector_weights.items(), key=lambda kv: kv[1], default=None)
+        if heaviest and heaviest[1] > 0.25:
+            summary.append(f"{heaviest[0]} {heaviest[1] * 100:.0f}%")
+        summary.append(f"{sum(1 for c in cards if c.has_thesis)}/{len(cards)} "
+                       f"with a thesis")
+        self._last_sector_weights = sector_weights
+        return cards, groups, summary
+
+    async def _pool(self, update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+        """/pool [US|BIST] [refresh] — the research queue, served from the last scan."""
+        args = [a.upper() for a in (ctx.args or [])]
+        market = _parse_market(args[0]) if args else Market.US
+        if market is None:
+            await update.effective_message.reply_text("Market must be US or BIST.")
+            return
+
+        if "REFRESH" in args:
+            note = await update.effective_message.reply_text(
+                "Screening the whole universe — this takes a few minutes.")
+            try:
+                kept, stored = await asyncio.to_thread(
+                    refresh_pool, self._provider, self._store, market)
+            except Exception as exc:  # noqa: BLE001
+                await note.edit_text(f"Screen failed: {exc}")
+                return
+            await note.edit_text(f"{kept} names passed; {stored} kept for reading.")
+
+        runs = self._store.pool_runs(market, limit=1)
+        if not runs:
+            await update.effective_message.reply_text(
+                "No screen recorded yet. `/pool US refresh` runs one — it takes "
+                "a few minutes.", parse_mode=ParseMode.MARKDOWN)
+            return
+
+        cards = await asyncio.to_thread(
+            build_pool_cards, self._store, market,
+            getattr(self, "_last_sector_weights", {}))
+        built = runs[0][:10]
+        footer = ""
+        if not getattr(self, "_last_sector_weights", None):
+            footer = ("Run /positions first and the pool will also flag names in "
+                      "sectors you are already heavy in.")
+        await self._send_to_owner(format_pool(
+            cards, market.value, built, self._store.new_in_pool(market), footer))
 
     async def _draft(self, update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         """/draft <US|BIST> <SYMBOL> <PRICE> <1-5> <your rough thoughts>
@@ -723,6 +902,30 @@ class PortfolioBot:
             return
         for text in messages:
             await self._send_to_owner(text)
+
+    async def _scan_pool(self) -> None:
+        """Refresh both markets in the background. Never messages the owner."""
+        for market in (Market.US, Market.BIST):
+            try:
+                kept, stored = await asyncio.to_thread(
+                    refresh_pool, self._provider, self._store, market)
+                log.info("Pool %s: %d passed, %d stored", market.value, kept, stored)
+            except Exception:  # noqa: BLE001 — a failed scan keeps the old pool
+                log.exception("Pool scan failed for %s", market.value)
+
+    async def _monthly_pool(self) -> None:
+        """Deliver the pool once a month, marking what is actually new."""
+        for market in (Market.US, Market.BIST):
+            if not self._store.pool_runs(market, limit=1):
+                continue
+            cards = await asyncio.to_thread(
+                build_pool_cards, self._store, market,
+                getattr(self, "_last_sector_weights", {}))
+            if not cards:
+                continue
+            built = self._store.pool_runs(market, limit=1)[0][:10]
+            await self._send_to_owner(format_pool(
+                cards, market.value, built, self._store.new_in_pool(market)))
 
     async def _digest_now(self, update: Update, _: ContextTypes.DEFAULT_TYPE) -> None:
         """/digest — build the weekly summary on demand."""

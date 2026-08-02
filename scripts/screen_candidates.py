@@ -50,93 +50,20 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import dataclasses
-import json
 import logging
 import pathlib
 
 from src.market.yahoo import YahooProvider
 from src.models import Market
-from src.signals import indicators as ind
-from src.signals.config import SignalConfig
+from src.screen.candidates import (
+    LIMITS,
+    Candidate,
+    Thresholds,
+    load_universe,
+    screen,
+)
 
-ROOT = pathlib.Path(__file__).resolve().parent.parent
-SP600 = ROOT / "universes" / "sp600.json"
-BIST = ROOT / "universes" / "bist.json"
-
-
-@dataclasses.dataclass(frozen=True)
-class Thresholds:
-    """One market's definition of "small enough, but tradeable"."""
-    min_cap_usd: float
-    max_cap_usd: float
-    min_daily_value_usd: float
-    max_institutional: float | None   # None = the data does not support this filter
-    note: str
-    ownership_note: str = ""
-
-
-# Caps are stated in USD for both markets and converted, because a fixed TRY
-# threshold ages badly under Turkish inflation — the same reason nominal BIST
-# returns mislead (SPEC section 6c).
-LIMITS = {
-    Market.US: Thresholds(
-        min_cap_usd=300e6, max_cap_usd=5e9, min_daily_value_usd=1e6,
-        max_institutional=0.70,
-        note="below ~$5B a large fund cannot build a position that moves its needle",
-    ),
-    Market.BIST: Thresholds(
-        # 750k against a 3B ceiling is a stricter volume-to-size ratio than the
-        # US band, which is the intent: spreads are wider here, so the same
-        # nominal turnover buys less certainty of getting out. A test pins the
-        # ratio, because the first version of these constants said "stricter" in
-        # the note and was quietly looser in the numbers.
-        min_cap_usd=100e6, max_cap_usd=3e9, min_daily_value_usd=750e3,
-        # Disabled, not merely unpopulated. Yahoo does report a number for BIST
-        # tickers, but it counts US 13F filers only — which is near zero for
-        # every Turkish company, so a threshold on it never binds and the run
-        # would show three filters while two were doing the work. A filter that
-        # silently never fires is worse than an absent one, because the output
-        # looks like it passed a test it never took.
-        max_institutional=None,
-        note=("tighter liquidity floor relative to size: BIST spreads are wider and "
-              "a position you cannot exit is not a position"),
-        ownership_note=("Yahoo's figure for BIST counts US institutional filers only "
-                        "— it reads ~4% for household names, which is real but "
-                        "measures something else. Filter disabled rather than run "
-                        "on a number that means the wrong thing."),
-    ),
-}
-
-
-@dataclasses.dataclass
-class Candidate:
-    symbol: str
-    sector: str
-    cap_usd: float
-    daily_value_usd: float
-    institutional: float | None
-    momentum: float
-    trend_ok: bool
-
-    @property
-    def unknown_ownership(self) -> bool:
-        return self.institutional is None
-
-
-def _universe(market: Market, path: pathlib.Path | None) -> tuple[list[str], dict, str]:
-    if path is not None:
-        data = json.loads(path.read_text())
-        return data["symbols"], data.get("sectors", {}), str(path.name)
-    if market is Market.US and SP600.exists():
-        data = json.loads(SP600.read_text())
-        return data["symbols"], data.get("sectors", {}), "S&P 600 SmallCap"
-    if market is Market.BIST and BIST.exists():
-        data = json.loads(BIST.read_text())
-        return data["symbols"], data.get("sectors", {}), "BIST 100"
-    cfg = SignalConfig()
-    return list(cfg.universe(market)), {}, "built-in watchlist (hand-picked)"
-
+__all__ = ["LIMITS", "Candidate", "Thresholds", "main"]
 
 def main() -> int:
     parser = argparse.ArgumentParser()
@@ -152,7 +79,7 @@ def main() -> int:
     logging.basicConfig(level=logging.WARNING)
     market = Market(args.market)
     limits = LIMITS[market]
-    symbols, sectors, source = _universe(market, args.universe)
+    symbols, sectors, source = load_universe(market, args.universe)
 
     provider = YahooProvider()
     fx = provider.get_fx_rate("USD", "TRY") if market is Market.BIST else 1.0
@@ -175,84 +102,26 @@ def main() -> int:
         print("  ⚠️  This universe was chosen by hand, so anything it produces is "
               "\n      shaped by that choice before any filter runs.")
 
-    kept: list[Candidate] = []
-    dropped = {"size": 0, "liquidity": 0, "crowded": 0, "no data": 0}
+    result = screen(
+        provider, market, symbols, sectors, fx=fx, limits=limits,
+        period=args.period,
+        progress=lambda i, n: print(f"    ...{i}/{n}", flush=True),
+    )
 
-    for i, symbol in enumerate(symbols, 1):
-        if i % 50 == 0:
-            print(f"    ...{i}/{len(symbols)}", flush=True)
-        try:
-            fundamentals = provider.get_fundamentals(symbol, market)
-            bars = provider.get_history(symbol, market, period=args.period)
-        except Exception:  # noqa: BLE001
-            dropped["no data"] += 1
-            continue
-
-        if fundamentals.market_cap is None or len(bars) < 220:
-            dropped["no data"] += 1
-            continue
-
-        cap_usd = fundamentals.market_cap / (fx if market is Market.BIST else 1.0)
-        if not (limits.min_cap_usd <= cap_usd <= limits.max_cap_usd):
-            dropped["size"] += 1
-            continue
-
-        frame = ind.bars_to_frame(bars)
-        close = frame["close"]
-        recent = frame.iloc[-60:]
-        daily_value = float((recent["close"] * recent["volume"]).median())
-        daily_value_usd = daily_value / (fx if market is Market.BIST else 1.0)
-        if daily_value_usd < limits.min_daily_value_usd:
-            dropped["liquidity"] += 1
-            continue
-
-        held = fundamentals.held_pct_institutions
-        if (limits.max_institutional is not None and held is not None
-                and held > limits.max_institutional):
-            dropped["crowded"] += 1
-            continue
-
-        # Ordering only. Twelve-month return skipping the last month, and whether
-        # the name is above its own 200-day average — enough to put the ones
-        # already working near the top of the reading list, and nothing more.
-        momentum = float(close.iloc[-21] / close.iloc[-252] - 1.0)
-        avg = ind.sma(close, 200)
-        trend_ok = bool(close.iloc[-1] > avg.iloc[-1]) if avg.notna().any() else False
-
-        kept.append(Candidate(
-            symbol, sectors.get(symbol, fundamentals.sector or "Unknown"),
-            cap_usd, daily_value_usd, held, momentum, trend_ok,
-        ))
-
+    kept, dropped = result.kept, result.dropped
     if not kept:
         print("\n  Nothing passed. Widen the bands, or check that the data source "
               "is answering at all.")
         return 1
 
-    kept.sort(key=lambda c: (c.trend_ok, c.momentum), reverse=True)
-    unknown = sum(1 for c in kept if c.unknown_ownership)
-
+    unknown = result.unknown_ownership
     # The ownership filter is not sector-neutral, and pretending otherwise sends
     # the owner shopping in one industry without noticing. Small banks and REITs
     # structurally carry less institutional ownership than, say, software, so an
     # absolute ceiling selects for them. The skew is reported, and the reading
     # list is capped per sector so a structural bias cannot fill it.
-    universe_mix: dict[str, int] = {}
-    for sector in sectors.values():
-        universe_mix[sector] = universe_mix.get(sector, 0) + 1
-    kept_mix: dict[str, int] = {}
-    for c in kept:
-        kept_mix[c.sector] = kept_mix.get(c.sector, 0) + 1
-
-    reading: list[Candidate] = []
-    per_sector: dict[str, int] = {}
-    for c in kept:
-        if per_sector.get(c.sector, 0) >= args.max_per_sector:
-            continue
-        reading.append(c)
-        per_sector[c.sector] = per_sector.get(c.sector, 0) + 1
-        if len(reading) >= args.top:
-            break
+    universe_mix, kept_mix = result.universe_mix, result.kept_mix
+    reading = result.reading_list(args.top, args.max_per_sector)
 
     print(f"\n  {len(kept)} names passed "
           f"(dropped: {dropped['size']} on size, {dropped['liquidity']} on "
