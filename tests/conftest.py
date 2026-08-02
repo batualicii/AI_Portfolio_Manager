@@ -177,3 +177,23 @@ def provider() -> FakeProvider:
 @pytest.fixture
 def no_news() -> FakeNews:
     return FakeNews()
+
+
+@pytest.fixture(autouse=True)
+def _isolated_sector_stats(tmp_path, monkeypatch):
+    """No test may read `universes/sector_stats*.json` from the working tree.
+
+    Those files are built by the reader following USAGE.md step 4, so a suite
+    that reads them passes on a fresh clone and fails on a working setup — which
+    is what happened: three tests patched `STATS` but not `STATS_DIR`, and once
+    the per-market files existed the real data answered instead of the fixture.
+
+    Redirecting both here makes the whole class of bug impossible rather than
+    fixing it once per call site. A test that wants stats writes them into its
+    own `tmp_path` and patches over this.
+    """
+    from src.thesis import interpret
+
+    empty = tmp_path / "no-stats-in-the-working-tree"
+    monkeypatch.setattr(interpret, "STATS", empty / "sector_stats.json")
+    monkeypatch.setattr(interpret, "STATS_DIR", empty)

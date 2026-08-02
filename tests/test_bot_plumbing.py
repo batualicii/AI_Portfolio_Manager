@@ -5,7 +5,11 @@ is wrong — a stale regime, a rejected message, an over-length chunk.
 """
 from __future__ import annotations
 
+import asyncio
+
 import pytest
+from telegram.error import BadRequest
+from types import SimpleNamespace
 
 from src.bot.markdown import escape_md
 from src.bot.telegram_bot import _TG_LIMIT, _split_for_telegram
@@ -302,3 +306,61 @@ def test_the_pool_is_scanned_weekly_but_delivered_monthly(bot):
     source = inspect.getsource(telegram_bot.PortfolioBot._on_startup)
     assert 'name="pool_scan"' in source and 'day_of_week="sat"' in source
     assert 'name="monthly_pool"' in source and "day=1" in source
+
+
+def test_a_long_report_is_split_rather_than_silently_lost(bot):
+    """The failure the owner actually hit: /positions produced nothing at all.
+
+    A nine-holding report exceeds Telegram's cap. `send_message` raises
+    BadRequest, the handler assumes unbalanced Markdown and resends the *same*
+    text as plain — length is unrelated to formatting, so it raises again,
+    uncaught, and the handler dies. The "Reading 9 positions…" note appears, is
+    deleted, and nothing follows. No reply, no error, nothing to debug from.
+    """
+    portfolio_bot, _ = bot
+    sent: list[dict] = []
+
+    class FakeBot:
+        async def send_message(self, chat_id, text, parse_mode=None):
+            if len(text) > 4096:
+                raise BadRequest("Message is too long")
+            sent.append({"text": text, "parse_mode": parse_mode})
+
+    portfolio_bot._app = SimpleNamespace(bot=FakeBot())
+    long_report = "\n".join(f"line {i} " + "x" * 60 for i in range(300))
+    asyncio.run(portfolio_bot._send_to_owner(long_report))
+
+    assert len(sent) > 1, "an over-length report must be split, not dropped"
+    assert all(len(m["text"]) <= 4096 for m in sent)
+    # Nothing may be lost in the split: every line still arrives.
+    delivered = "\n".join(m["text"] for m in sent)
+    for i in (0, 150, 299):
+        assert f"line {i} " in delivered
+
+
+def test_unbalanced_markdown_still_falls_back_to_plain_text(bot):
+    """The other failure, which the retry does fix — it must survive the split."""
+    portfolio_bot, _ = bot
+    sent: list[dict] = []
+
+    class FussyBot:
+        async def send_message(self, chat_id, text, parse_mode=None):
+            if parse_mode is not None:
+                raise BadRequest("Can't parse entities")
+            sent.append({"text": text, "parse_mode": parse_mode})
+
+    portfolio_bot._app = SimpleNamespace(bot=FussyBot())
+    asyncio.run(portfolio_bot._send_to_owner("*unbalanced"))
+
+    assert [m["parse_mode"] for m in sent] == [None]
+    assert sent[0]["text"] == "*unbalanced"
+
+
+def test_the_splitter_is_actually_wired_into_the_sender():
+    """It existed, was correct and was tested — and nothing ever called it."""
+    import inspect
+
+    from src.bot import telegram_bot
+
+    source = inspect.getsource(telegram_bot.PortfolioBot._send_to_owner)
+    assert "_split_for_telegram" in source

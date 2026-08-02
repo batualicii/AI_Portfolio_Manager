@@ -36,6 +36,7 @@ def test_peer_context_names_the_median_and_the_direction(tmp_path, monkeypatch):
         "pe_ratio": {"median": 18.0, "n": 20, "values": [10.0, 18.0, 30.0]},
     }}}))
     monkeypatch.setattr(interpret, "STATS", stats)
+    monkeypatch.setattr(interpret, "STATS_DIR", tmp_path / "none")
 
     reading = read_fundamentals(Fundamentals(symbol="X", pe_ratio=24.0), "Tech")[0]
     assert "sector median 18" in reading.context
@@ -44,9 +45,18 @@ def test_peer_context_names_the_median_and_the_direction(tmp_path, monkeypatch):
 
 
 def _write_stats(tmp_path, monkeypatch, payload):
+    """Point the module at a legacy stats file — and at *no* per-market ones.
+
+    `_load_stats` prefers `STATS_DIR / sector_stats_<MARKET>.json` and only falls
+    back to `STATS`. Patching `STATS` alone therefore worked exactly until the
+    reader followed USAGE.md step 4 and built the real files, after which the
+    working tree answered instead of the fixture and three tests failed on a
+    correctly set-up checkout. Both paths get redirected here.
+    """
     stats = tmp_path / "sector_stats.json"
     stats.write_text(json.dumps(payload))
     monkeypatch.setattr(interpret, "STATS", stats)
+    monkeypatch.setattr(interpret, "STATS_DIR", tmp_path / "no-per-market-files")
     return stats
 
 
@@ -138,6 +148,7 @@ def test_missing_stats_file_is_reported_as_unbuilt_not_as_nothing_to_say(
     from src.thesis import interpret
 
     monkeypatch.setattr(interpret, "STATS", tmp_path / "absent.json")
+    monkeypatch.setattr(interpret, "STATS_DIR", tmp_path / "none")
     note = interpret.peer_coverage("Tech", Market.US)
     assert note and "build_sector_stats" in note
 

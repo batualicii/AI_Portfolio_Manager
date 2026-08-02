@@ -217,23 +217,37 @@ class PortfolioBot:
         await self._send_to_owner(text)
 
     async def _send_to_owner(self, text: str) -> None:
-        """Send with Markdown, falling back to plain text if Telegram rejects it.
+        """Split to Telegram's limit, then send each part.
 
-        Telegram refuses the entire message when its Markdown does not balance.
-        Dynamic text is escaped at the formatters, but this is the digest the
-        user's morning depends on — an unreadable delivery beats no delivery.
+        Two distinct failures, and only one of them has a retry that works:
+
+        * **Unbalanced Markdown** — Telegram refuses the whole message. Dynamic
+          text is escaped at the formatters, but this is the report the owner's
+          decision depends on, so an unformatted delivery beats none.
+        * **Over length** — Telegram refuses anything past 4096 characters, and
+          resending the identical text without Markdown *cannot* help, because
+          length has nothing to do with formatting. The second attempt raises
+          the same error, uncaught, and the handler dies: the "Reading 9
+          positions…" note appears, is deleted, and nothing follows. Silence,
+          with no error anywhere the owner can see.
+
+        That was live for every long report — /positions, /audit, /pool,
+        /digest, the weekly summary — because `_split_for_telegram` existed and
+        was tested but nothing called it. Splitting happens here, before the
+        send, so length can never reach the Markdown retry in the first place.
         """
-        try:
-            await self._app.bot.send_message(
-                chat_id=self._settings.telegram_owner_id,
-                text=text,
-                parse_mode=ParseMode.MARKDOWN,
-            )
-        except BadRequest as exc:
-            log.warning("Markdown rejected (%s); resending as plain text.", exc)
-            await self._app.bot.send_message(
-                chat_id=self._settings.telegram_owner_id, text=text
-            )
+        for chunk in _split_for_telegram(text):
+            try:
+                await self._app.bot.send_message(
+                    chat_id=self._settings.telegram_owner_id,
+                    text=chunk,
+                    parse_mode=ParseMode.MARKDOWN,
+                )
+            except BadRequest as exc:
+                log.warning("Markdown rejected (%s); resending as plain text.", exc)
+                await self._app.bot.send_message(
+                    chat_id=self._settings.telegram_owner_id, text=chunk
+                )
 
     # ---------------------------- handlers ----------------------------
 
