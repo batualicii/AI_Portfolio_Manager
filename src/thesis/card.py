@@ -25,12 +25,12 @@ from dataclasses import dataclass, field
 
 from src.market.types import Fundamentals
 from src.models import Market
-from src.thesis.interpret import sector_medians
+from src.thesis.interpret import market_medians, sector_medians
 
-# Used only where a sector median does not exist — BIST, overwhelmingly, where
-# ~100 names over ~34 sectors leaves no sample to take a median from. Absolute
-# lines are weaker evidence than peers and the card says which one it used, so
-# the reader is never left guessing what "ahead" was measured against.
+# The last resort, used only when neither a sector nor a market median exists —
+# an unbuilt stats file, or a metric nothing in the universe reported. Absolute
+# lines are the weakest reference here and the card always says which one it
+# used, so the reader is never left guessing what "ahead" was measured against.
 ABSOLUTE = {
     "growth": 0.05,
     "margin": 0.0,
@@ -95,13 +95,16 @@ class Card:
 
 
 def _fact(label: str, value: float | None, median, n, *, pct: bool,
-          lower_is_better: bool = False) -> Fact | None:
+          lower_is_better: bool = False, kind: str = "sector") -> Fact | None:
     if value is None:
         return None
     display = f"{value * 100:+.0f}%" if pct else f"{value:.0f}"
     if median is not None:
         ref_display = f"{median * 100:+.0f}%" if pct else f"{median:.0f}"
-        reference = f"sector {ref_display}, n={n}"
+        # `kind` is "sector" or "market": the second mixes industries and is a
+        # level rather than a peer comparison, so it is never printed as the
+        # first. A bank's margin next to an airline's is not a like comparison.
+        reference = f"{kind} {ref_display}, n={n}"
         ahead = value < median if lower_is_better else value > median
     else:
         line = ABSOLUTE.get(label)
@@ -137,6 +140,13 @@ def build_card(
     """
     sector = sector or fundamentals.sector or "Unknown"
     medians = sector_medians(sector, market)
+    # Three references, in descending strength: this company's own sector, the
+    # whole market, a fixed line. Which one was used is always visible in the
+    # rendered text, so "ahead" never quietly changes meaning between names.
+    reference_kind = "sector"
+    if not medians:
+        medians = market_medians(market)
+        reference_kind = "market"
     card = Card(symbol.upper(), market, sector,
                 weight=weight, has_thesis=thesis_summary is not None)
 
@@ -152,10 +162,10 @@ def build_card(
         ("margin", "profit_margin", True, False),
         ("P/E", "pe_ratio", False, True),
     ):
-        stat = medians.get(field_name, {})
+        stat = medians.get(field_name) or {}
         fact = _fact(label, getattr(fundamentals, field_name, None),
                      stat.get("median"), stat.get("n"),
-                     pct=pct, lower_is_better=lower)
+                     pct=pct, lower_is_better=lower, kind=reference_kind)
         if fact is not None:
             card.facts.append(fact)
 
@@ -178,8 +188,14 @@ def build_card(
 
     if not medians:
         card.warnings.append(
-            "no sector medians for this market — compared against fixed lines, "
-            "which is weaker evidence"
+            "no medians for this market at all — compared against fixed lines, "
+            "which is the weakest reference here"
+        )
+    elif reference_kind == "market":
+        card.warnings.append(
+            f"no peer sample in {sector} — compared against the whole market, "
+            f"which mixes industries: read it as a level, not as "
+            f"\"better than its peers\""
         )
     if thesis_summary is None and weight is not None:
         card.warnings.append(

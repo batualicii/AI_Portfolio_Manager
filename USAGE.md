@@ -60,12 +60,14 @@ These are the ponds the screen fishes in. Run once, refresh every few months:
 ```bash
 python -m scripts.build_smallcap_universe   # S&P 600 — ~600 US small caps
 python -m scripts.build_bist_universe       # BIST 100 — ~100 Turkish names
-python -m scripts.build_sector_stats        # what "normal" looks like per sector
+python -m scripts.build_sector_stats                                  # US
+python -m scripts.build_sector_stats --universe universes/bist.json --market BIST
 ```
 
-The third one is slow (one call per name) and makes the difference between
+The last two are slow (one call per name) and make the difference between
 `/brief` printing "P/E 24" and printing "P/E 24, the median in its sector is 18".
-Re-run it a few times a year.
+Re-run them a few times a year. Each market writes its own file, so neither run
+overwrites the other.
 
 ## 5. Run
 
@@ -99,9 +101,9 @@ Every holding in one message, grouped by what has actually changed:
 
 BIMAS · Consumer Staples · 11.4% of the book · since entry +23%
     3/4 ahead
-    ahead  growth +31% (fixed line +5%, no sector median) · trend +9% …
+    ahead  growth +31% (market +42%, n=96) · trend +9% (its own 200-day average)
     also   12m +18% · worst fall −27%
-    ⚠️ no sector medians for this market — compared against fixed lines
+    ⚠️ no peer sample in Consumer Staples — compared against the whole market
     ⚠️ no thesis on record — nothing can be monitored, nothing will alert you
 
 ── Something changed (3) ──
@@ -190,10 +192,15 @@ sector's median. Two things about those comparison lines are worth knowing:
   remarkable for a retailer, because the two are not measuring the same thing.
   These lines rank a company among its peers and nothing else.
 
-**BIST names get no peer context, and cannot.** A hundred names spread over
-~34 sectors is about three each — there is no sample to take a median from. The
-page says so where the comparison would have been; it is a limit of the market's
-size, not a run that failed, and the US medians are not offered as a substitute.
+**BIST names get no *sector* peers, and cannot.** A hundred names spread over
+~34 sectors is about three each — no sample to take a median from, whatever you
+re-run. So they fall back to the **whole market** instead: `P/E 4 (market 9,
+n=93)`. That is a level this company sits at, not a peer comparison — it mixes a
+bank with an airline by construction, and the page says so every time it uses
+it. Still far better than nothing, which is what those lines showed before.
+
+US medians are never offered as a BIST substitute. Different economy, different
+cost of capital, different normal.
 
 Anything the data source could not supply is listed explicitly. A silent gap
 reads as "nothing to report", which is a different claim.

@@ -27,6 +27,9 @@ def stats(tmp_path, monkeypatch):
         },
     }}))
     monkeypatch.setattr(interpret, "STATS", path)
+    # Pointed at an empty directory so the suite can never pick up a real
+    # sector_stats_*.json from the working tree and drift with it.
+    monkeypatch.setattr(interpret, "STATS_DIR", tmp_path / "none")
     return path
 
 
@@ -79,16 +82,51 @@ def test_a_cheap_pe_counts_as_ahead_and_an_expensive_one_does_not(stats):
     assert build_card("X", Market.US, dear, sector="Tech").facts[0].ahead is False
 
 
-def test_without_sector_medians_the_card_says_what_it_compared_against(stats):
-    """BIST has no peers, so "ahead" must not silently mean something else."""
+def test_with_no_medians_at_all_the_card_says_what_it_compared_against(stats):
+    """"Ahead" must never silently change meaning between two names."""
     f = Fundamentals(symbol="THYAO", sector="Industrials", revenue_growth=0.30)
     card = build_card("THYAO", Market.BIST, f, sector="Industrials")
 
     reference = card.facts[0].reference
-    assert "fixed line" in reference
     assert reference.startswith("fixed line"), "must not read as a peer comparison"
-    assert "no sector median" in reference
-    assert any("no sector medians" in w for w in card.warnings)
+    assert any("fixed lines" in w for w in card.warnings)
+
+
+def test_a_sector_without_peers_falls_back_to_the_whole_market(tmp_path,
+                                                               monkeypatch):
+    """BIST: ~100 names over ~34 sectors gives no sector a sample, but the
+    index as a whole has one — far better than a fixed line."""
+    path = tmp_path / "sector_stats_BIST.json"
+    path.write_text(json.dumps({"market": "BIST", "sectors": {}, "overall": {
+        "pe_ratio": {"median": 9.0, "n": 96, "values": [6.0, 9.0, 14.0]},
+    }}))
+    monkeypatch.setattr(interpret, "STATS_DIR", tmp_path)
+    monkeypatch.setattr(interpret, "STATS", tmp_path / "absent.json")
+
+    f = Fundamentals(symbol="THYAO", sector="Industrials", pe_ratio=12.0)
+    card = build_card("THYAO", Market.BIST, f, sector="Industrials")
+
+    assert "market 9, n=96" in card.facts[0].reference
+    assert "sector" not in card.facts[0].reference, "a level is not a peer set"
+    assert card.facts[0].ahead is False          # dearer than the market
+    assert any("mixes industries" in w for w in card.warnings)
+
+
+def test_each_market_reads_its_own_file(tmp_path, monkeypatch):
+    """One shared file meant the second run erased the first, and BIST names
+    were then measured against US medians with nothing saying so."""
+    (tmp_path / "sector_stats_US.json").write_text(json.dumps(
+        {"market": "US", "sectors": {"Tech": {
+            "pe_ratio": {"median": 30.0, "n": 64, "values": [30.0]}}}}))
+    (tmp_path / "sector_stats_BIST.json").write_text(json.dumps(
+        {"market": "BIST", "sectors": {}, "overall": {
+            "pe_ratio": {"median": 9.0, "n": 96, "values": [9.0]}}}))
+    monkeypatch.setattr(interpret, "STATS_DIR", tmp_path)
+    monkeypatch.setattr(interpret, "STATS", tmp_path / "absent.json")
+
+    f = Fundamentals(symbol="X", sector="Tech", pe_ratio=12.0)
+    assert "sector 30" in build_card("X", Market.US, f, sector="Tech").facts[0].reference
+    assert "market 9" in build_card("X", Market.BIST, f, sector="Tech").facts[0].reference
 
 
 def test_the_tally_is_never_presented_as_a_score():

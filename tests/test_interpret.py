@@ -1,7 +1,10 @@
 """Reading a number: context without a verdict."""
 from __future__ import annotations
 
+import json
+
 from src.market.types import Fundamentals
+from src.thesis import interpret
 from src.thesis.interpret import (
     checklist_line,
     quality_checklist,
@@ -28,10 +31,6 @@ def test_without_peer_data_it_says_so_rather_than_grading():
 
 
 def test_peer_context_names_the_median_and_the_direction(tmp_path, monkeypatch):
-    import json
-
-    from src.thesis import interpret
-
     stats = tmp_path / "sector_stats.json"
     stats.write_text(json.dumps({"sectors": {"Tech": {
         "pe_ratio": {"median": 18.0, "n": 20, "values": [10.0, 18.0, 30.0]},
@@ -45,10 +44,6 @@ def test_peer_context_names_the_median_and_the_direction(tmp_path, monkeypatch):
 
 
 def _write_stats(tmp_path, monkeypatch, payload):
-    import json
-
-    from src.thesis import interpret
-
     stats = tmp_path / "sector_stats.json"
     stats.write_text(json.dumps(payload))
     monkeypatch.setattr(interpret, "STATS", stats)
@@ -79,14 +74,36 @@ def test_bist_is_told_why_it_structurally_has_no_peers(tmp_path, monkeypatch):
     from src.models import Market
     from src.thesis.interpret import peer_coverage
 
-    _write_stats(tmp_path, monkeypatch,
-                 {"market": "US", "min_sample": 8, "sectors": {"Tech": {}}})
+    stats = tmp_path / "sector_stats_BIST.json"
+    stats.write_text(json.dumps({
+        "market": "BIST", "min_sample": 8, "sectors": {},
+        "overall": {"pe_ratio": {"median": 9.0, "n": 96, "values": [9.0]}},
+    }))
+    monkeypatch.setattr(interpret, "STATS_DIR", tmp_path)
+    monkeypatch.setattr(interpret, "STATS", tmp_path / "absent.json")
 
     note = peer_coverage("Holding", Market.BIST)
     assert note and "BIST" in note
     assert "not a missing run" in note
-    assert "not a stand-in" in note, "US medians must not be offered as a proxy"
+    assert "whole market instead (n=96)" in note
+    assert "not as a verdict against its peers" in note
 
+
+def test_us_medians_are_never_offered_as_a_bist_stand_in(tmp_path, monkeypatch):
+    """Different economy, different cost of capital, different normal."""
+    from src.models import Market
+    from src.thesis.interpret import market_medians, peer_coverage, sector_medians
+
+    _write_stats(tmp_path, monkeypatch,
+                 {"market": "US", "min_sample": 8, "sectors": {"Tech": {"pe_ratio": {
+                     "median": 30.0, "n": 64, "values": [30.0]}}},
+                  "overall": {"pe_ratio": {"median": 25.0, "n": 600,
+                                           "values": [25.0]}}})
+    monkeypatch.setattr(interpret, "STATS_DIR", tmp_path / "none")
+
+    assert sector_medians("Tech", Market.BIST) == {}
+    assert market_medians(Market.BIST) == {}
+    assert "not a fair reference" in peer_coverage("Tech", Market.BIST)
     assert peer_coverage("Tech", Market.US) is None
 
 

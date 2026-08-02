@@ -42,7 +42,8 @@ from src.market.types import Fundamentals
 from src.models import Market
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent.parent
-STATS = ROOT / "universes" / "sector_stats.json"
+STATS = ROOT / "universes" / "sector_stats.json"          # legacy single-file
+STATS_DIR = ROOT / "universes"
 
 # Above this an "above/below the median" statement is worth reading straight;
 # below it the median still beats nothing, but it moves if two names change.
@@ -76,6 +77,7 @@ class Reading:
     peer_median: float | None = None
     percentile: int | None = None
     sample_size: int | None = None
+    reference: str = "sector"   # "sector" peers, or "market" as a coarse level
 
     @property
     def thin(self) -> bool:
@@ -89,9 +91,9 @@ class Reading:
         direction = "above" if self.value > self.peer_median else "below"
         med = (f"{self.peer_median * 100:.0f}%"
                if abs(self.peer_median) < 10 else f"{self.peer_median:.0f}")
-        line = f"sector median {med} — this is {direction} it"
+        line = f"{self.reference} median {med} — this is {direction} it"
         if self.percentile is not None:
-            line += f", higher than {self.percentile}% of its sector"
+            line += f", higher than {self.percentile}% of the {self.reference}"
         if self.sample_size is not None:
             # Without n the reader cannot tell a median of 114 names from a
             # median of 11, and both print the same confident sentence.
@@ -100,29 +102,71 @@ class Reading:
         return line
 
 
-def _load_stats() -> dict:
-    if not STATS.exists():
+def _read(path: pathlib.Path) -> dict:
+    if not path.exists():
         return {}
     try:
-        return json.loads(STATS.read_text())
+        return json.loads(path.read_text())
     except (json.JSONDecodeError, OSError):
         return {}
+
+
+def _load_stats(market: Market | None = None, strict: bool = True) -> dict:
+    """The stats for one market, from its own file.
+
+    One file per market, because a single shared one meant whichever run
+    finished last erased the other — and a BIST name would then be measured
+    against US medians without anything saying so.
+
+    `strict=False` returns a mismatched file anyway, so the diagnostic path can
+    look at what exists and explain *why* it is not usable. Nothing that feeds a
+    comparison may use it.
+    """
+    if market is not None:
+        per_market = _read(STATS_DIR / f"sector_stats_{market.value}.json")
+        if per_market:
+            return per_market
+    legacy = _read(STATS)
+    if strict and market is not None and legacy.get("market") not in (
+            None, market.value):
+        return {}
+    return legacy
 
 
 def sector_medians(sector: str | None, market: Market | None = None) -> dict:
     """`{field: {"median": …, "n": …}}` for a sector, or `{}` when there is none.
 
-    Empty is the honest answer for a whole market: BIST has no medians and will
-    not acquire any, so callers branch on emptiness rather than being handed
-    US figures that would look like peers and are not.
+    Sector peers only. When a sector has no sample — BIST, almost entirely —
+    this is empty and the caller falls back to `market_medians`, which is a
+    different and weaker kind of reference and must be labelled differently.
     """
-    stats = _load_stats()
+    stats = _load_stats(market)
     if not stats:
         return {}
     built_for = stats.get("market")
     if market is not None and built_for and built_for != market.value:
         return {}
     return stats.get("sectors", {}).get(sector or "", {})
+
+
+def market_medians(market: Market | None = None) -> dict:
+    """The whole market in one bucket — a level, not a peer comparison.
+
+    This exists for BIST. A hundred names over ~34 sectors gives no sector a
+    sample, but the index as a whole has one, and "P/E 12 against a market
+    median of 9" is far more use than "P/E 12 against a fixed line of 25".
+
+    What it is not: comparable across industries. It mixes a bank with an
+    airline by construction, which is exactly why it is a separate function
+    with a separate name — so nothing can print it under the word "sector".
+    """
+    stats = _load_stats(market)
+    if not stats:
+        return {}
+    built_for = stats.get("market")
+    if market is not None and built_for and built_for != market.value:
+        return {}
+    return stats.get("overall", {})
 
 
 def peer_coverage(sector: str | None, market: Market | None = None) -> str | None:
@@ -134,23 +178,30 @@ def peer_coverage(sector: str | None, market: Market | None = None) -> str | Non
     produces a median. That is a property of the market's size, not a failed job,
     and saying so stops the same question being asked every few months.
     """
-    stats = _load_stats()
+    stats = _load_stats(market, strict=False)
     if not stats:
-        return ("Sector medians have not been built yet — "
-                "`python -m scripts.build_sector_stats` measures them.")
+        return (f"No medians built for {market.value if market else 'this market'} "
+                f"yet — `python -m scripts.build_sector_stats` measures them.")
 
     built_for = stats.get("market")
     if market is not None and built_for and built_for != market.value:
-        if market is Market.BIST:
-            return (
-                "No sector medians for BIST. The index is ~100 names spread over "
-                "~34 sectors — about three each, where a median needs at least "
-                f"{stats.get('min_sample', 8)}. This is a limit of the market's "
-                "size, not a missing run, and the US medians are not a stand-in: "
-                "different economy, different cost of capital, different normal."
-            )
-        return (f"Sector medians here were measured on {built_for} names, so "
-                f"they are not a fair reference for a {market.value} company.")
+        return (f"Medians here were measured on {built_for} names, so they are "
+                f"not a fair reference for a {market.value} company — different "
+                f"economy, different cost of capital, different normal. Build "
+                f"this market's own with `scripts.build_sector_stats`.")
+
+    if sector and sector not in stats.get("sectors", {}) and stats.get("overall"):
+        n = max(v["n"] for v in stats["overall"].values())
+        return (
+            f"No peer sample in {sector}"
+            + (" — BIST is ~100 names over ~34 sectors, about three each, where a "
+               f"median needs at least {stats.get('min_sample', 8)}. A limit of "
+               "the market's size, not a missing run. "
+               if market is Market.BIST else ", so ")
+            + f"the comparison above is against the whole market instead (n={n}). "
+              "That mixes a bank with an airline on purpose: read it as a level "
+              "this company sits at, not as a verdict against its peers."
+        )
 
     if sector and sector in stats.get("omitted", {}):
         counts = stats["omitted"][sector] or {}
@@ -175,8 +226,16 @@ def peer_coverage(sector: str | None, market: Market | None = None) -> str | Non
 
 def read_fundamentals(f: Fundamentals, sector: str | None = None,
                       market: Market | None = None) -> list[Reading]:
-    """Turn raw fields into readable observations with peer context."""
+    """Turn raw fields into readable observations with peer context.
+
+    Falls back from sector peers to the whole market where a sector has no
+    sample, and labels which was used — the two are not the same claim.
+    """
     stats = sector_medians(sector, market)
+    kind = "sector"
+    if not stats:
+        stats = market_medians(market)
+        kind = "market"
     out: list[Reading] = []
 
     for field, pct in (("revenue_growth", True), ("profit_margin", True),
@@ -184,7 +243,7 @@ def read_fundamentals(f: Fundamentals, sector: str | None = None,
         value = getattr(f, field, None)
         if value is None:
             continue
-        peers = stats.get(field, {})
+        peers = stats.get(field) or {}
         median = peers.get("median")
         percentile = None
         if peers.get("values"):
@@ -198,6 +257,7 @@ def read_fundamentals(f: Fundamentals, sector: str | None = None,
             peer_median=median,
             percentile=percentile,
             sample_size=peers.get("n") if median is not None else None,
+            reference=kind,
         ))
     return out
 
