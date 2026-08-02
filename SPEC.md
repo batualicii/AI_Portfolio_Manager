@@ -133,6 +133,14 @@ falsifier**, never as a reason to buy or sell on their own.
   what the user already owns, a candidate always looks better, and the resulting
   churn is precisely what section 0 was rewritten to avoid. A test asserts the two
   renders are byte-identical for identical inputs.
+- **Selection record** (`/pass`, `/scorecard`): every decision is logged, declined
+  names included, and the owner's purchases are eventually compared against the
+  names they saw and rejected. This is the only thing in the system that can test
+  section 0's central assumption — that the owner's choosing is where the return
+  comes from. It reports "cannot tell yet" below ten decisions a side or a median
+  age under a year, and prints the standard error beside the gap thereafter.
+  Declined names also move out of the pool's main list, so a research queue does
+  not become a treadmill of re-deciding.
 - No ranked buy/sell list, and `/positions` never says sell. Grouping positions by
   *what changed* is a statement of fact; grouping them by *what to do* would reinstate
   the quarterly rotation rule (section 0) through the interface.

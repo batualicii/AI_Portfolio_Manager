@@ -297,17 +297,32 @@ def format_positions(cards, groups: dict[str, list], summary: list[str]) -> str:
 
 
 def format_pool(cards, market: str, built_at: str, new_symbols=None,
-                footer: str = "") -> str:
+                footer: str = "", declined=None) -> str:
     """The research queue, in the same words the portfolio is described in."""
+    declined = declined or []
     plural = "name" if len(cards) == 1 else "names"
-    lines = [f"🎣 *Research pool — {escape_md(market)}*",
-             escape_md(f"{len(cards)} {plural} · screened {built_at}"), ""]
+    head = f"{len(cards)} {plural} · screened {built_at}"
+    if declined:
+        head += f" · {len(declined)} you already passed on, at the end"
+    lines = [f"🎣 *Research pool — {escape_md(market)}*", escape_md(head), ""]
 
     new_symbols = set(new_symbols or ())
     for i, card in enumerate(cards, 1):
         suffix = " 🆕" if card.symbol in new_symbols else ""
         lines += _card_block(card, prefix=f"{i}. ", suffix=suffix)
         lines.append("")
+
+    if declined:
+        # Not hidden and not mixed in. Re-presenting a name you already rejected
+        # as though it were new asks you to redo the decision, which is how a
+        # research queue becomes a treadmill.
+        lines += ["── *Already declined* ──",
+                  escape_md("Still passing the filters. Your own reason is "
+                            "attached — changing your mind is allowed, but it "
+                            "should be a decision rather than a re-run."), ""]
+        for card in declined:
+            lines += _card_block(card)
+            lines.append("")
 
     if new_symbols:
         n = len(new_symbols)

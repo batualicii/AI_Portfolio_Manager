@@ -126,3 +126,49 @@ def test_a_name_the_provider_cannot_answer_for_is_counted_not_fatal():
                     Market.US, ["X"], {}, fx=1.0)
     assert result.kept == []
     assert result.dropped["no data"] == 1
+
+
+def test_a_name_you_declined_stops_arriving_as_a_fresh_idea(store):
+    """Re-presenting a rejected name asks you to redo the decision."""
+    from src.screen.pool import build_pool_cards
+
+    store.save_pool(Market.US, [_candidate("AAA"), _candidate("BBB")])
+    store.record_decision("BBB", Market.US, "PASSED", 40.0, "priced for perfection")
+
+    to_read, declined = build_pool_cards(
+        store, Market.US, passed=store.passed_symbols(Market.US))
+
+    assert [c.symbol for c in to_read] == ["AAA"]
+    assert [c.symbol for c in declined] == ["BBB"]
+
+
+def test_a_declined_name_is_set_aside_with_your_reason_not_hidden(store):
+    """Changing your mind stays possible — it just has to be a decision."""
+    from src.screen.pool import build_pool_cards
+    from src.thesis.format import format_pool
+
+    store.save_pool(Market.US, [_candidate("BBB")])
+    store.record_decision("BBB", Market.US, "PASSED", 40.0, "priced for perfection")
+
+    to_read, declined = build_pool_cards(
+        store, Market.US, passed=store.passed_symbols(Market.US))
+    text = format_pool(to_read, "US", "2026-08-04", declined=declined)
+
+    assert "BBB" in text, "set aside, never dropped"
+    assert "priced for perfection" in text
+    assert "Already declined" in text
+
+
+def test_buying_a_name_you_once_passed_on_clears_the_flag(store):
+    """The last decision wins; the earlier pass is history, not a standing veto."""
+    from src.screen.pool import build_pool_cards
+
+    store.save_pool(Market.US, [_candidate("BBB")])
+    store.record_decision("BBB", Market.US, "PASSED", 40.0, "too dear")
+    store.record_decision("BBB", Market.US, "BOUGHT", 52.0, "changed my mind")
+
+    to_read, declined = build_pool_cards(
+        store, Market.US, passed=store.passed_symbols(Market.US))
+
+    assert [c.symbol for c in to_read] == ["BBB"]
+    assert declined == []

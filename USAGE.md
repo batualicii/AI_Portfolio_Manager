@@ -160,6 +160,52 @@ Run `/positions` first in a session and the pool will also flag candidates in
 sectors you are already heavy in. It flags rather than filters: hiding a good
 name to protect you from yourself is a worse trade than telling you the truth.
 
+### Saying no, and having it remembered
+
+```
+/pass US ASTH priced for perfection, no margin of safety
+```
+
+Two things happen. The name moves to an **Already declined** section at the
+bottom of `/pool` instead of arriving each month as a fresh idea — with your own
+reason attached, so changing your mind stays possible and stays a decision
+rather than a re-run. Buying it later clears the flag; the last call wins.
+
+And it enters the record that `/scorecard` reads.
+
+### Finding out whether your picking is any good
+
+```
+/scorecard
+```
+
+Everything else here assumes the screen narrows and *you* choose well. This is
+the only thing that checks it. Not against the index — against **the names you
+saw and declined**:
+
+```
+14 bought, 23 passed, median age 502 days. Your picks are +11.4 pp against the
+ones you declined, with a standard error of 8.2 pp. That is inside the noise:
+it is not yet evidence either way.
+```
+
+That is the honest shape of it for a long time. Under ten decisions a side, or
+a median age under a year, it refuses to compute anything and says what is
+missing instead. Past that it prints the gap next to its standard error and
+calls anything inside two of them noise — with per-name volatility near 40% a
+year, a dozen picks carry a standard error around 15 points, so a 10-point lead
+means nothing.
+
+It was built before there was anything to report, so it cannot be quietly
+adjusted into agreeing later. It will report a bad result exactly as readily as
+a good one, and that is the point: it is the one measurement that can tell you
+this whole approach is not working.
+
+**`/pass` is the unglamorous half and the half that matters.** Purchases alone
+can only be compared against the index, which is a different question dominated
+by the market. Purchases against passes compare your judgement against the
+alternatives you actually had, at the moment you had them.
+
 The terminal version still exists, and prints the sector-mix diagnostics the
 Telegram one leaves out:
 
@@ -273,6 +319,8 @@ can. A position you cannot write a thesis for has already answered it.
 |---|---|
 | `/positions` | every holding, grouped by what changed |
 | `/pool US` | the research queue, in the same words |
+| `/pass US ASTH <why>` | record a name you read and declined |
+| `/scorecard` | did your picks beat the ones you passed on? |
 | `/thesis` | list your open theses |
 | `/thesis ASTH` | one thesis, with every condition's current state |
 | `/audit` | every holding, with the question that decides it |

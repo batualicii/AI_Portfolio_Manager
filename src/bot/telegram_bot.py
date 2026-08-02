@@ -602,16 +602,22 @@ class PortfolioBot:
                 "a few minutes.", parse_mode=ParseMode.MARKDOWN)
             return
 
-        cards = await asyncio.to_thread(
+        cards, declined = await asyncio.to_thread(
             build_pool_cards, self._store, market,
-            getattr(self, "_last_sector_weights", {}))
+            getattr(self, "_last_sector_weights", {}),
+            self._store.passed_symbols(market))
         built = runs[0][:10]
         footer = ""
         if not getattr(self, "_last_sector_weights", None):
             footer = ("Run /positions first and the pool will also flag names in "
                       "sectors you are already heavy in.")
+        if not declined:
+            footer += ("  /pass <MARKET> <SYMBOL> <why> on the ones you read and "
+                       "reject — they stop coming back as new, and they are what "
+                       "/scorecard measures your purchases against.")
         await self._send_to_owner(format_pool(
-            cards, market.value, built, self._store.new_in_pool(market), footer))
+            cards, market.value, built, self._store.new_in_pool(market), footer,
+            declined))
 
     # -------------------------- selection record -------------------------
 
@@ -982,14 +988,16 @@ class PortfolioBot:
         for market in (Market.US, Market.BIST):
             if not self._store.pool_runs(market, limit=1):
                 continue
-            cards = await asyncio.to_thread(
+            cards, declined = await asyncio.to_thread(
                 build_pool_cards, self._store, market,
-                getattr(self, "_last_sector_weights", {}))
-            if not cards:
+                getattr(self, "_last_sector_weights", {}),
+                self._store.passed_symbols(market))
+            if not cards and not declined:
                 continue
             built = self._store.pool_runs(market, limit=1)[0][:10]
             await self._send_to_owner(format_pool(
-                cards, market.value, built, self._store.new_in_pool(market)))
+                cards, market.value, built, self._store.new_in_pool(market),
+                "", declined))
 
     async def _digest_now(self, update: Update, _: ContextTypes.DEFAULT_TYPE) -> None:
         """/digest — build the weekly summary on demand."""

@@ -91,16 +91,35 @@ def refresh_pool(
     return len(result.kept), len(reading)
 
 
-def build_pool_cards(store, market: Market, sector_weights=None) -> list:
-    """The stored pool, rendered with the same builder the portfolio uses."""
+def build_pool_cards(store, market: Market, sector_weights=None,
+                     passed: dict | None = None) -> tuple[list, list]:
+    """The stored pool as cards, split into fresh ones and ones already declined.
+
+    Returns `(to_read, already_passed)`. A name you looked at last month and said
+    no to is not new information, and showing it in the same list as the rest
+    quietly asks you to make the decision again — which is how a research queue
+    turns into a treadmill. It is not dropped either: your own reason comes back
+    with it, so changing your mind stays possible and stays deliberate.
+    """
     sector_weights = sector_weights or {}
-    return [
-        build_card(
+    passed = passed or {}
+    to_read, declined = [], []
+
+    for row in store.pool(market):
+        card = build_card(
             row["symbol"], market, _Row(row), _Price(row),
             sector=row["sector"],
             cap_usd=row["cap_usd"],
             institutional=row["institutional"],
             crowded_sector_weight=sector_weights.get(row["sector"]),
         )
-        for row in store.pool(market)
-    ]
+        record = passed.get(row["symbol"])
+        if record:
+            when = record["decided_at"][:10]
+            reason = record["reason"] or "no reason recorded"
+            card.warnings.append(f"you passed on this on {when}: {reason}")
+            declined.append(card)
+        else:
+            to_read.append(card)
+
+    return to_read, declined

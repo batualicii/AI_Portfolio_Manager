@@ -57,7 +57,7 @@ def test_a_holding_and_a_candidate_are_described_identically(stats, tmp_path):
         "X", "Tech", 1.2e9, 2e6, 0.41, 0.40, True, 0.12, 44.0,
         0.19, 0.03, 22.0, 1.4, -0.30,
     )])
-    from_pool = build_pool_cards(store, Market.US)[0]
+    from_pool = build_pool_cards(store, Market.US)[0][0]
     from_book = build_card("X", Market.US, FUNDAMENTALS, _Price(), sector="Tech")
 
     assert [f.render() for f in from_pool.facts] == [f.render() for f in from_book.facts]
@@ -174,7 +174,8 @@ def test_the_pool_states_that_its_order_is_not_a_ranking(stats, tmp_path):
     store = Store(tmp_path / "t.db")
     store.save_pool(Market.US, [Candidate("X", "Tech", 1e9, 2e6, 0.4, 0.4, True,
                                           0.1, 44.0, 0.19, 0.03, 22.0, 1.4, -0.3)])
-    text = format_pool(build_pool_cards(store, Market.US), "US", "2026-08-04")
+    to_read, _ = build_pool_cards(store, Market.US)
+    text = format_pool(to_read, "US", "2026-08-04")
 
     assert "reading order and nothing else" in text
     assert "not to buy" in text
