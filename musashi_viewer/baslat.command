@@ -1,6 +1,18 @@
 #!/bin/bash
 # Musashi STEP Görüntüleyici — çift tıklayarak çalıştırın.
-cd "$(dirname "$0")" || exit 1
+# Masaüstündeki bir kısayoldan (sembolik bağ) çağrıldığında da çalışır:
+# betiğin gerçek konumunu bulmak için bağları çözüyoruz.
+SOURCE="${BASH_SOURCE[0]:-$0}"
+while [ -L "$SOURCE" ]; do
+  LINK_DIR="$(cd -P "$(dirname "$SOURCE")" >/dev/null 2>&1 && pwd)"
+  SOURCE="$(readlink "$SOURCE")"
+  case "$SOURCE" in
+    /*) ;;
+    *) SOURCE="$LINK_DIR/$SOURCE" ;;
+  esac
+done
+HERE="$(cd -P "$(dirname "$SOURCE")" >/dev/null 2>&1 && pwd)"
+cd "$HERE" || exit 1
 
 if command -v python3 >/dev/null 2>&1; then
   PY=python3

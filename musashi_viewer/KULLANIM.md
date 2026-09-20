@@ -10,11 +10,21 @@ Kurulum gerekmez: tarayıcıda çalışır, kütüphaneler klasörün içinde g�
 
 ## 1. Çalıştırma (macOS)
 
+### Masaüstüne kısayol koymak (bir kereye mahsus)
+
+`musashi_viewer` klasöründeki **`masaustune_kisayol_koy.command`** dosyasına çift tıklayın.
+Masaüstünüzde **“Musashi Görüntüleyici”** adında bir kısayol oluşur; bundan sonra
+programı hep oradan açabilirsiniz. Depoyu başka bir klasöre taşırsanız bu betiği
+yeniden çalıştırın (kısayol içinde tam yol yazılıdır).
+
+### Normal çalıştırma
+
 1. STEP dosyalarını şu üç yoldan biriyle ver:
    - `musashi_viewer/models/` klasörüne kopyala, **veya**
    - Masaüstü'nde adında *Musashi* geçen klasörde bırak (program kendisi bulur), **veya**
    - program açıldıktan sonra dosyaları pencereye sürükleyip bırak.
-2. `baslat.command` dosyasına **çift tıkla**.
+2. Masaüstündeki **“Musashi Görüntüleyici”** kısayoluna — ya da klasördeki
+   `baslat.command` dosyasına — **çift tıkla**.
 3. Tarayıcı kendiliğinden açılır. Kapatmak için Terminal penceresinde `Ctrl+C`.
 
 > macOS "geliştirici doğrulanamadığı için açılamadı" derse: `baslat.command` üzerinde
