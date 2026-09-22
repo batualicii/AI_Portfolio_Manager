@@ -1,0 +1,6 @@
+STEP dosyalarınızı (.step / .stp) bu klasöre kopyalayın.
+
+Alternatifler:
+  • Masaüstünüzde STEP dosyası içeren bir klasöre koyun — program kendisi arayıp bulur.
+  • Programı açıp dosyaları doğrudan pencereye sürükleyip bırakın.
+  • Terminal'den klasör yolunu verin:  python3 sunucu.py "/Users/adiniz/Desktop/Klasorum"
