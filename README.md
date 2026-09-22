@@ -77,12 +77,3 @@ data/                   # SQLite db (gitignored, created at runtime)
 - **Quant/LLM wall (SPEC §1):** all prices, signals, and levels are computed by Python.
   Claude only *writes the explanation* of those numbers — it never invents data or picks stocks.
 - Secrets live in `.env` only and are never committed (`.gitignore` covers it).
-
----
-
-## Also in this repository
-
-`musashi_viewer/` — an unrelated standalone tool: a browser-based STEP (CAD) viewer that
-renders parts with physically-based metal shading and lets you pull them apart by hand and
-snap them back with one button. It shares no code with the trading bot.
-See [musashi_viewer/KULLANIM.md](musashi_viewer/KULLANIM.md) (Turkish).

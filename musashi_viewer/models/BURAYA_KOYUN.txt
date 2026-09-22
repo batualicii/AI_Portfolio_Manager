@@ -1,6 +1,0 @@
-STEP dosyalarınızı (.step / .stp) bu klasöre kopyalayın.
-
-Alternatifler:
-  • Masaüstü'nde adında "Musashi" geçen bir klasöre koyun — program kendisi bulur.
-  • Programı açıp dosyaları doğrudan pencereye sürükleyip bırakın.
-  • Terminal'den klasör yolunu verin:  python3 sunucu.py "/Users/adiniz/Desktop/Musashi Kit"

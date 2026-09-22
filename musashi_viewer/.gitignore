@@ -1,6 +1,0 @@
-node_modules/
-package-lock.json
-models/*.step
-models/*.stp
-models/*.STEP
-models/*.STP
